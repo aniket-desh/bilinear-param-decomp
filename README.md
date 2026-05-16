@@ -7,9 +7,8 @@ probe-conditioned interaction matrix `M_r` and its eigenspaces, learns an
 SPD-style rank-one gated parameter decomposition, and asks whether the learned
 atoms (or clusters of co-active atoms) align with the bilinear eigenspaces.
 
-See `docs/01_theory_breakdown_bilinear_spd_benchmark.md` for the full theory and
-`docs/02_experimental_codebase_spec_bilinear_spd_benchmark.md` for the codebase
-spec.
+The theory writeup and codebase spec that drive this repo are kept locally
+(not committed). `summary.md` rolls up what's been built and verified so far.
 
 ## Quickstart
 

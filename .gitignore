@@ -25,3 +25,6 @@ runs/*/artifacts/
 # editor
 .vscode/
 .idea/
+
+# private specs / source PDFs
+docs/

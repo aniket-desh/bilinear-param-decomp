@@ -9,8 +9,7 @@ interaction matrix $M_r$, learn an SPD-style rank-one gated decomposition of the
 bilinear weights $(A, B)$, and ask whether atoms (or clusters of co-active atoms)
 align with the eigenspaces of $M_r$.
 
-Theory: `docs/01_theory_breakdown_bilinear_spd_benchmark.md`.
-Codebase spec: `docs/02_experimental_codebase_spec_bilinear_spd_benchmark.md`.
+Theory writeup and codebase spec are kept locally and not committed.
 
 ## Reuse decisions (made before Day 1)
 

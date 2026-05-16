@@ -1,0 +1,20 @@
+{
+  "pairwise_0_1": {
+    "equivalence_max_err": 9.5367431640625e-07,
+    "n_groups": 4,
+    "n_degenerate_groups": 0,
+    "top_abs_eval": 7.130159378051758,
+    "group_ranks": [
+      1,
+      1,
+      1,
+      1
+    ],
+    "group_mean_abs_evals": [
+      7.130159378051758,
+      6.839148998260498,
+      0.23900794982910156,
+      0.18111808598041534
+    ]
+  }
+}

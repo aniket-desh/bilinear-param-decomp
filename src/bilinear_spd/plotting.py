@@ -137,6 +137,72 @@ def plot_grokking_curves(
     plt.close(fig)
 
 
+# --- Day 3: decomposition training ---
+
+
+def plot_decomposition_curves(
+    history: list[dict],
+    out_path: str | Path,
+    title: str | None = None,
+) -> None:
+    """4-panel decomposition diagnostic.
+
+    Top: total loss + KL behavior loss (twin axis).
+    2nd: relative parameter reconstruction error for A and B.
+    3rd: gate L0 (count of gates > 1e-3) for A and B, plus C_A / C_B reference lines.
+    4th: mean gate value over the batch (the "usage frequency").
+    """
+    apply_style()
+    if not history:
+        raise ValueError("history is empty")
+    steps = [h["step"] for h in history]
+    loss = [h["loss"] for h in history]
+    kl = [h["kl"] for h in history]
+    recon_A = [h["recon_A"] for h in history]
+    recon_B = [h["recon_B"] for h in history]
+    l0_A = [h["l0_A"] for h in history]
+    l0_B = [h["l0_B"] for h in history]
+    mg_A = [h["mean_gate_A"] for h in history]
+    mg_B = [h["mean_gate_B"] for h in history]
+
+    fig, axes = plt.subplots(4, 1, figsize=(7.0, 9.5), sharex=True)
+
+    axes[0].plot(steps, loss, color=COLORS["blue"], label="total loss")
+    axes[0].set_yscale("log")
+    axes[0].set_ylabel("total loss")
+    twin = axes[0].twinx()
+    twin.plot(steps, kl, color=COLORS["orange"], label="KL")
+    twin.set_yscale("log")
+    twin.set_ylabel("KL behavior", color=COLORS["orange"])
+    twin.tick_params(axis="y", colors=COLORS["orange"])
+    twin.spines["top"].set_visible(False)
+    twin.grid(False)
+
+    axes[1].plot(steps, recon_A, color=COLORS["blue"], label="A")
+    axes[1].plot(steps, recon_B, color=COLORS["green"], label="B")
+    axes[1].set_yscale("log")
+    axes[1].set_ylabel(r"$\|\Delta\|^2 / \|W\|^2$")
+    axes[1].legend(loc="best", frameon=False, fontsize=9)
+
+    axes[2].plot(steps, l0_A, color=COLORS["blue"], label="L0 (A)")
+    axes[2].plot(steps, l0_B, color=COLORS["green"], label="L0 (B)")
+    axes[2].set_ylabel(r"# gates > $10^{-3}$")
+    axes[2].legend(loc="best", frameon=False, fontsize=9)
+
+    axes[3].plot(steps, mg_A, color=COLORS["blue"], label="mean g_A")
+    axes[3].plot(steps, mg_B, color=COLORS["green"], label="mean g_B")
+    axes[3].set_ylabel("mean gate")
+    axes[3].set_xlabel("step")
+    axes[3].set_ylim(-0.05, 1.05)
+    axes[3].legend(loc="best", frameon=False, fontsize=9)
+
+    if title is not None:
+        fig.suptitle(title, y=0.995)
+    fig.tight_layout()
+    fig.savefig(out_path)
+    plt.close(fig)
+
+
 # --- Day 2: functional analysis ---
 
 

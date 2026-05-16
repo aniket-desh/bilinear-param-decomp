@@ -1,4 +1,4 @@
-"""Training loops. Day 1: bilinear MLP. Day 2.5: grok-metric tracking."""
+"""Training loops. Day 1: bilinear MLP. Day 2.5: grok-metric tracking. Day 3: decomposition."""
 
 from __future__ import annotations
 
@@ -7,7 +7,15 @@ from dataclasses import dataclass, field
 import torch
 import torch.nn.functional as F
 
+from .decomposition import BilinearComponentMLP
 from .functional import construct_M_r, eigendecompose_M, group_eigenspaces
+from .losses import (
+    frequency_penalty,
+    gate_l0,
+    kl_logits,
+    relative_param_recon,
+    sparsity_lp,
+)
 from .models import BilinearMLP
 
 
@@ -162,4 +170,137 @@ def train_bilinear(
         final_logit_margin=last_margin,
         history=history,
         early_stopped=early_stopped,
+    )
+
+
+# --- Day 3: train the gated rank-one decomposition ---
+
+
+@dataclass
+class DecompTrainMetrics:
+    final_step: int
+    final_loss: float
+    final_param_recon_A: float
+    final_param_recon_B: float
+    final_kl: float
+    final_l0_A: float
+    final_l0_B: float
+    history: list[dict] = field(default_factory=list)
+
+
+def train_decomposition(
+    model: BilinearComponentMLP,
+    x: torch.Tensor,
+    y_target_logits: torch.Tensor,
+    cfg: dict,
+    mask_samples_per_step: int = 1,
+    verbose: bool = True,
+) -> DecompTrainMetrics:
+    """Train atoms U, V and gate nets on a frozen bilinear target.
+
+    Loss = λ_behavior · KL( target || hat )
+         + λ_param_A · ||A − Â||²/||A||²
+         + λ_param_B · ||B − B̂||²/||B||²
+         + λ_sparsity · E [ Σ_c g_c^p ]
+         + λ_frequency · Σ_c [ μ_c + β μ_c log2(1 + sum_c) ]
+
+    KL is computed against `y_target_logits` (precomputed from the frozen target
+    on the same `x` — passing it in lets the caller decide whether to detach).
+    """
+    optim = torch.optim.AdamW(
+        [p for p in model.parameters() if p.requires_grad],
+        lr=cfg["lr"],
+        weight_decay=cfg.get("weight_decay", 0.0),
+    )
+    n_steps = int(cfg["steps"])
+    log_every = int(cfg.get("log_every", 200))
+
+    lam_behavior = float(cfg.get("lambda_behavior", 1.0))
+    lam_pA = float(cfg.get("lambda_param_A", 1.0))
+    lam_pB = float(cfg.get("lambda_param_B", 1.0))
+    lam_sparse = float(cfg.get("lambda_sparsity", 0.0))
+    lam_freq = float(cfg.get("lambda_frequency", 0.0))
+    p_sparse = float(cfg.get("p_sparsity", 1.0))
+    freq_beta = float(cfg.get("freq_beta", 0.5))
+    use_stoch = bool(cfg.get("use_stochastic_masks", True))
+
+    history: list[dict] = []
+    last_entry: dict = {}
+
+    y_target_logits = y_target_logits.detach()
+
+    for step in range(n_steps):
+        optim.zero_grad()
+
+        # Average the loss across multiple stochastic mask samples; for
+        # mask_samples_per_step=1 (default) this is a single sample.
+        total = torch.zeros((), device=x.device, dtype=x.dtype)
+        n_samples = max(1, mask_samples_per_step)
+        last_aux = None
+        last_yhat = None
+        for _ in range(n_samples):
+            y_hat, aux = model(
+                x,
+                mask_mode="stochastic" if use_stoch else "deterministic",
+                return_aux=True,
+            )
+            last_aux = aux
+            last_yhat = y_hat
+            kl = kl_logits(y_hat, y_target_logits)
+            recon_A = relative_param_recon(model.A_target, model.U_A, model.V_A)
+            recon_B = relative_param_recon(model.B_target, model.U_B, model.V_B)
+            sparse_loss = sparsity_lp(aux.g_A, p_sparse) + sparsity_lp(aux.g_B, p_sparse)
+            freq_loss = frequency_penalty(aux.g_A_upper, beta=freq_beta) + frequency_penalty(
+                aux.g_B_upper, beta=freq_beta
+            )
+            total = total + (
+                lam_behavior * kl
+                + lam_pA * recon_A
+                + lam_pB * recon_B
+                + lam_sparse * sparse_loss
+                + lam_freq * freq_loss
+            )
+        (total / n_samples).backward()
+        optim.step()
+
+        if step % log_every == 0 or step == n_steps - 1:
+            assert last_aux is not None and last_yhat is not None
+            with torch.no_grad():
+                recon_A_now = float(relative_param_recon(model.A_target, model.U_A, model.V_A))
+                recon_B_now = float(relative_param_recon(model.B_target, model.U_B, model.V_B))
+                kl_now = float(kl_logits(last_yhat, y_target_logits))
+                l0_A = gate_l0(last_aux.g_A)
+                l0_B = gate_l0(last_aux.g_B)
+                # mean gate (the "frequency" of each component being on)
+                mean_gA = float(last_aux.g_A.mean().item())
+                mean_gB = float(last_aux.g_B.mean().item())
+            entry = {
+                "step": step,
+                "loss": float((total / n_samples).item()),
+                "kl": kl_now,
+                "recon_A": recon_A_now,
+                "recon_B": recon_B_now,
+                "l0_A": l0_A,
+                "l0_B": l0_B,
+                "mean_gate_A": mean_gA,
+                "mean_gate_B": mean_gB,
+            }
+            history.append(entry)
+            last_entry = entry
+            if verbose:
+                print(
+                    f"step {step:6d}  loss {entry['loss']:.4f}  KL {kl_now:.4f}  "
+                    f"recon_A {recon_A_now:.4f}  recon_B {recon_B_now:.4f}  "
+                    f"L0_A {l0_A:5.2f}/{model.C_A}  L0_B {l0_B:5.2f}/{model.C_B}"
+                )
+
+    return DecompTrainMetrics(
+        final_step=step,
+        final_loss=last_entry.get("loss", float("nan")),
+        final_param_recon_A=last_entry.get("recon_A", float("nan")),
+        final_param_recon_B=last_entry.get("recon_B", float("nan")),
+        final_kl=last_entry.get("kl", float("nan")),
+        final_l0_A=last_entry.get("l0_A", float("nan")),
+        final_l0_B=last_entry.get("l0_B", float("nan")),
+        history=history,
     )

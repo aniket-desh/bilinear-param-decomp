@@ -1,0 +1,79 @@
+project: bilinear_spd_benchmark
+run_name: modadd_p23_grok_seed0
+
+seed: 0
+device: cpu
+
+task:
+  name: modular_addition
+  p: 23
+  input_encoding: concat_onehot
+  train_fraction: 1.0
+  eval_fraction: 1.0
+
+model:
+  d_hidden: 48
+  use_bias: false
+  init_scale: 0.02
+
+train_model:
+  optimizer: adamw
+  lr: 0.003
+  weight_decay: 1.0
+  steps: 40000
+  batch_size: 529           # full table
+  log_every: 500
+  target_accuracy: 1.01
+  target_acc_patience: 999999
+  grok_metrics_every: 500
+  grok_probe: centered_0
+  grok_rel_tols: [0.01, 0.05]
+
+probes:
+  type: centered_class
+  classes: [0, 1, 2, 3]
+  include_pairwise:
+    - [0, 1]
+    - [0, 2]
+
+eigenspaces:
+  rel_tol: 0.01
+  min_abs_eval: 1.0e-6
+
+decomposition:
+  method: minimal_gated_rank_one
+  decompose: [A, B]
+  C_A: 96
+  C_B: 96
+  gate_hidden: 96
+  gate_activation: relu
+  gate_temperature: 1.0
+  use_stochastic_masks: true
+  mask_samples_per_batch: 4
+
+train_decomp:
+  optimizer: adamw
+  lr: 0.001
+  steps: 20000
+  batch_size: 529
+  lambda_behavior: 1.0
+  lambda_param_A: 1.0
+  lambda_param_B: 1.0
+  lambda_sparsity: 0.001
+  lambda_frequency: 0.001
+  p_sparsity: 1.0
+  log_every: 200
+
+clustering:
+  method: threshold_connected_components
+  corr_thresholds: [0.5, 0.6, 0.7, 0.8, 0.9]
+  selected_threshold: 0.7
+
+ablations:
+  n_random_baselines: 100
+  low_alignment_quantile: 0.25
+
+plotting:
+  style: goodfire_light
+  dpi: 300
+  save_svg: true

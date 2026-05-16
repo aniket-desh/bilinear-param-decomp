@@ -13,13 +13,14 @@ import torch
 
 from bilinear_spd.data import input_dim, make_dataset, output_dim
 from bilinear_spd.functional import (
+    build_probes,
     centered_class_probe,
     construct_M_r,
     functional_scalar,
     quadratic_scalar,
 )
 from bilinear_spd.models import BilinearMLP
-from bilinear_spd.plotting import plot_training_curves
+from bilinear_spd.plotting import plot_grokking_curves, plot_training_curves
 from bilinear_spd.train import train_bilinear
 from bilinear_spd.utils import (
     load_config,
@@ -57,7 +58,32 @@ def main() -> None:
     print(f"model: d_in={model.d_in} d_hidden={model.d_hidden} d_out={model.d_out}  "
           f"params={sum(p.numel() for p in model.parameters())}")
 
-    metrics = train_bilinear(model, data["x"], data["y"], cfg["train_model"], verbose=True)
+    # optional grok-metric tracking
+    train_cfg = cfg["train_model"]
+    probe_for_grok = None
+    grok_eval_every = train_cfg.get("grok_metrics_every")
+    grok_rel_tols = tuple(train_cfg.get("grok_rel_tols", (0.01, 0.05)))
+    if grok_eval_every is not None:
+        all_probes = build_probes(cfg["probes"], p=output_dim(cfg["task"]), device=device)
+        grok_probe_name = train_cfg.get("grok_probe", next(iter(all_probes)))
+        if grok_probe_name not in all_probes:
+            raise SystemExit(
+                f"grok_probe '{grok_probe_name}' not in built probes {list(all_probes)}"
+            )
+        probe_for_grok = all_probes[grok_probe_name]
+        print(f"grok tracking enabled: probe={grok_probe_name} every {grok_eval_every} steps "
+              f"τ={list(grok_rel_tols)}")
+
+    metrics = train_bilinear(
+        model,
+        data["x"],
+        data["y"],
+        train_cfg,
+        probe_for_grok=probe_for_grok,
+        grok_eval_every=grok_eval_every,
+        grok_rel_tols=grok_rel_tols,
+        verbose=True,
+    )
 
     save_checkpoint(
         out / "checkpoints" / "bilinear_mlp.pt",
@@ -83,6 +109,13 @@ def main() -> None:
 
     fig_path = out / "figures" / "training_curves.png"
     plot_training_curves(metrics.history, fig_path, title=cfg["run_name"])
+
+    if probe_for_grok is not None:
+        plot_grokking_curves(
+            metrics.history,
+            out / "figures" / "grokking_curves.png",
+            title=cfg["run_name"],
+        )
 
     summary = {
         "final_step": metrics.final_step,

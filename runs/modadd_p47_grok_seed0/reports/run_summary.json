@@ -1,0 +1,9 @@
+{
+  "final_step": 59999,
+  "final_loss": 4.547528988041449e-06,
+  "final_accuracy": 1.0,
+  "final_logit_margin": 13.979833602905273,
+  "early_stopped": false,
+  "equivalence_max_err_probe_0": 5.7220458984375e-06,
+  "param_count": 22560
+}

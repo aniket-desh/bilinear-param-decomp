@@ -73,6 +73,70 @@ def plot_training_curves(
     plt.close(fig)
 
 
+# --- Day 2.5: grokking visualization ---
+
+
+def plot_grokking_curves(
+    history: list[dict],
+    out_path: str | Path,
+    title: str | None = None,
+) -> None:
+    """4-panel grokking diagnostic.
+
+    Top: loss (log) + train accuracy on a twin axis.
+    2nd: parameter L2 norm — should rise during memorization, fall during grokking.
+    3rd: degenerate-group count at multiple τ — flat-zero during memorization,
+         steps up during grokking.
+    4th: top |λ| of the tracked M_r — typically grows then plateaus.
+    """
+    apply_style()
+    grok_rows = [h for h in history if "param_l2_norm" in h]
+    if not grok_rows:
+        raise ValueError("history has no grok metrics; pass probe_for_grok to train_bilinear")
+
+    steps = [h["step"] for h in grok_rows]
+    loss = [h["loss"] for h in grok_rows]
+    acc = [h["accuracy"] for h in grok_rows]
+    pn = [h["param_l2_norm"] for h in grok_rows]
+    top_lam = [h["top_abs_eval"] for h in grok_rows]
+    deg_keys = sorted(k for k in grok_rows[0] if k.startswith("n_degenerate_"))
+
+    fig, axes = plt.subplots(4, 1, figsize=(7.0, 9.5), sharex=True)
+
+    axes[0].plot(steps, loss, color=COLORS["blue"], label="loss")
+    axes[0].set_yscale("log")
+    axes[0].set_ylabel("cross-entropy")
+    twin = axes[0].twinx()
+    twin.plot(steps, acc, color=COLORS["green"], label="accuracy")
+    twin.set_ylim(-0.05, 1.05)
+    twin.set_ylabel("accuracy", color=COLORS["green"])
+    twin.tick_params(axis="y", colors=COLORS["green"])
+    twin.spines["top"].set_visible(False)
+    twin.grid(False)
+
+    axes[1].plot(steps, pn, color=COLORS["purple"])
+    axes[1].set_ylabel(r"$\|\theta\|^2$")
+
+    deg_palette = [COLORS["orange"], COLORS["red"], COLORS["blue"]]
+    for k, dk in enumerate(deg_keys):
+        vals = [h[dk] for h in grok_rows]
+        tau = dk.split("_")[-1]
+        axes[2].plot(steps, vals, color=deg_palette[k % len(deg_palette)],
+                     label=f"τ = {tau}")
+    axes[2].set_ylabel("# degenerate groups")
+    axes[2].legend(loc="best", frameon=False, fontsize=9)
+
+    axes[3].plot(steps, top_lam, color=COLORS["green"])
+    axes[3].set_ylabel(r"top $|\lambda|$")
+    axes[3].set_xlabel("step")
+
+    if title is not None:
+        fig.suptitle(title, y=0.995)
+    fig.tight_layout()
+    fig.savefig(out_path)
+    plt.close(fig)
+
+
 # --- Day 2: functional analysis ---
 
 
@@ -122,21 +186,30 @@ def plot_spectrum(
     if title is not None:
         ax.set_title(title)
 
-    # annotate the leading degenerate groups
-    annotated = 0
-    for gi, g in enumerate(groups):
-        if g.rank >= 2 and annotated < 4:
-            label_x = max(g.indices)
-            label_y = max(np.abs(evals_np[i]) for i in g.indices)
-            ax.annotate(
-                f"rank {g.rank}, μ|λ|={g.mean_abs_eval:.2f}",
-                xy=(label_x, label_y),
-                xytext=(8, 4),
-                textcoords="offset points",
-                fontsize=8,
-                color=palette[gi],
-            )
-            annotated += 1
+    # summary box rather than per-group annotations (which collide when many
+    # degenerate groups sit at similar |λ|).
+    degenerate = [g for g in groups if g.rank >= 2]
+    if degenerate:
+        max_rank = max(g.rank for g in degenerate)
+        total_vec = sum(g.rank for g in degenerate)
+        box_text = (
+            f"groups: {len(groups)}\n"
+            f"degenerate (rank ≥ 2): {len(degenerate)}\n"
+            f"max group rank: {max_rank}\n"
+            f"eigvecs in degenerate groups: {total_vec}"
+        )
+    else:
+        box_text = f"groups: {len(groups)}\nno degenerate groups"
+    ax.text(
+        0.99,
+        0.97,
+        box_text,
+        transform=ax.transAxes,
+        ha="right",
+        va="top",
+        fontsize=8,
+        bbox={"facecolor": "white", "edgecolor": COLORS["gray"], "alpha": 0.9, "boxstyle": "round,pad=0.4"},
+    )
 
     fig.tight_layout()
     fig.savefig(out_path)

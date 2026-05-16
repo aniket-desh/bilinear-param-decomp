@@ -168,19 +168,116 @@ This is not a bug in any of the code we wrote. Equivalence holds, projectors
 are correct, plots render. The trained model is simply uninteresting from a
 mechanistic standpoint.
 
-## Up next — Day 2.5 (training-regime fix)
+## Day 2.5 — training-regime fix + p sweep
 
-Before Day 3's decomposition work makes sense, we need a bilinear model that
-actually learns the Fourier algorithm. Standard grokking recipe for
-modular addition:
+### What landed
 
-- shrink `init_scale` from 0.5 → 0.02 (spec default);
-- add weight decay (~ 1.0 — yes, that high — required for grokking);
-- shrink `d_hidden` closer to $p$;
-- train for much longer (10k–50k steps), do **not** early-stop on accuracy;
-- track $|λ|$ degeneracy ratio as a training metric so we can *see* the
-  grokking transition.
+- `train_bilinear` now optionally tracks "grok metrics" every $N$ steps:
+  parameter $L^2$ norm, top $|\lambda|$ of $M_r$ for a tracked probe, and
+  the number of degenerate eigenspace groups at one or more tolerances.
+- `plot_grokking_curves`: 4-panel diagnostic (loss + acc, $\|\theta\|^2$,
+  degenerate-group count at $\tau \in \{0.01, 0.05\}$, top $|\lambda|$).
+- `plot_spectrum`: replaced the colliding per-group text annotations with a
+  single corner summary box (groups / degenerate / max rank / eigvecs in
+  degenerate).
+- Three grokking configs: `modadd_p{13,23,47}_grok.yaml`. All use
+  `init_scale = 0.02`, `weight_decay = 1.0`, `target_accuracy = 1.01` (no
+  early stop), and 30k / 40k / 60k steps respectively.
 
-I'll add a `configs/modadd_p13_grok.yaml` with these, retrain, and re-run
-`analyze_functional` to confirm same-sign degenerate eigenspaces appear.
-Once they do, Day 3 (the actual SPD-style decomposition) is unblocked.
+### Sweep result at $\tau = 0.01$
+
+For each run I compare the Day 1/2 baseline (no weight decay, early stop on
+accuracy, large init) against the Day 2.5 grokked model on the same probe
+$r = e_0 - \tfrac{1}{p}\mathbf{1}$:
+
+| run | wd | init | steps | top $\|λ\|$ | # groups | # degenerate | max group rank |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| `modadd_p13` (Day 1/2) | 0.0 | 0.5 | 612 (early stop) | 16.9 | 26 | **0** | 1 |
+| `modadd_p13_grok` | 1.0 | 0.02 | 30 000 | 15.6 | 22 | **2** | 3 |
+| `modadd_p23_grok` | 1.0 | 0.02 | 40 000 | 21.3 | 40 | **4** | 4 |
+| `modadd_p47_grok` | 1.0 | 0.02 | 60 000 | 31.0 | 56 | **12** | **20** |
+
+The qualitative shift between the memorization baseline and the grokked
+models is the whole point. With weight decay turned on, the degenerate
+eigenspace structure emerges and *grows with $p$* — at $p=47$ a single
+eigenspace projector has rank 20, exactly what we want for downstream
+projector-vs-atom alignment.
+
+Wall time on M2 Air CPU: 18 s + 35 s + 3 min. The whole sweep is under
+4 minutes.
+
+### Grokking curves
+
+#### p = 47 — the cleanest signal
+
+![p47 grokking curves](runs/modadd_p47_grok_seed0/figures/grokking_curves.png)
+
+Train accuracy hits 1.0 around step 200. Weight norm spikes early, sags,
+and then slowly recovers. Degenerate-group count is already non-zero by
+step 500 — the strong weight decay + small init combination skips the
+memorization plateau entirely. From step ~2000 onward the model sits in a
+quasi-Fourier regime with 5–18 degenerate groups oscillating (the
+oscillation is due to the τ-threshold flipping nearby pairs in and out).
+
+This is *not* the classical Power-et-al delayed-grokking curve where train
+accuracy saturates long before test accuracy and the algorithmic phase
+takes thousands of steps to emerge. With these hyperparameters the model
+goes directly into the algorithmic basin.
+
+### Functional spectra (post-grokking)
+
+#### modadd_p47_grok — centered class probe
+
+![p47 spectrum grok](runs/modadd_p47_grok_seed0/figures/spectrum_centered_0.png)
+![p47 eigvecs grok](runs/modadd_p47_grok_seed0/figures/eigenvectors_centered_0.png)
+
+The spectrum has ~65 leading eigenvalues at similar magnitude ($\sim 10^1$),
+a sharp two-decade cliff at index 65, and a noise floor below index 73.
+**46 of the 94 eigenvectors live inside rank-≥2 degenerate eigenspaces** —
+the signature of translation-equivariant feature pairing.
+
+The eigenvector heatmap is the visual confirmation: clear periodic
+patterns repeat across the a-slot (rows 0–46) and b-slot (rows 47–93), with
+column-wise sinusoidal structure. Compare to the Day 2 memorization
+eigenvectors, which looked like random noise. The model is doing
+something Fourier-flavored.
+
+Caveat: "Fourier-flavored" is not "fully Fourier." Several columns are
+muddy. A future check is to FFT each eigenvector along the a-slot and
+report what fraction of energy concentrates at a single frequency — that
+would be the rigorous test.
+
+#### modadd_p13_grok (smaller, fewer degeneracies but same regime)
+
+![p13 spectrum grok](runs/modadd_p13_grok_seed0/figures/spectrum_centered_0.png)
+
+Only 2 degenerate groups (vs 12 at $p=47$). The model has chosen ~2 Fourier
+frequencies to encode $p=13$ — enough capacity in $m=32$ for more, but
+weight decay encourages parsimony. This matches the Nanda et al. finding
+that grokking-mode transformers on modular addition typically use a small
+"key frequency set."
+
+### What this unblocks
+
+Day 3 (the SPD-style rank-one parameter decomposition) finally has a
+meaningful target. The grokked checkpoints have:
+
+- nontrivial degenerate eigenspaces to compare atoms against (projector
+  alignment is well-defined);
+- multi-rank groups (notably the rank-20 group at $p=47$) where the
+  alignment-vs-projector distinction the theory doc emphasizes actually
+  matters;
+- Fourier-flavored eigenvectors, so visual sanity checks during alignment
+  are interpretable.
+
+## Up next — Day 3
+
+- `BilinearComponentMLP`: gated rank-one decomposition of $A$ and $B$.
+  Parameters $U_A, V_A, U_B, V_B$ + small MLP gates. Cherry-pick
+  `lower_leaky`/`upper_leaky` sigmoids from the Goodfire `nano_param_decomp`
+  file with attribution.
+- `train_decomp`: 4-term loss (KL behavior, parameter recon $\|A - \hat A\|^2_F$,
+  L1 gate sparsity, frequency penalty). Use stochastic-mask sampling
+  (`mask = g + (1-g)·U(0,1)`) from the first iteration.
+- Train decompositions for all three grokked checkpoints. Track parameter
+  reconstruction error and behavior agreement.

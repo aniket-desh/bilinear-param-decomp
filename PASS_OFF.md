@@ -317,7 +317,52 @@ publishable target. Don't start this until Day 4 is committed.
 
 ---
 
-## 7. Key design decisions (so you don't have to rediscover them)
+## 7. Hardware notes
+
+You almost certainly have an A40 (48 GB GDDR6, ~37 FP32 TFLOPs, ~700 GB/s).
+For the current scope of this project, **A40 is overkill** — but the
+headroom means you can crank settings without thinking. Concrete sizes for
+the most memory-heavy training step (per-sample masked weights
+`A_g ∈ [batch, d_in, d_hidden]`, FP32, × 4 mask samples × 2 for A and B):
+
+| scenario | `A_g` shape | total live mem | A40 use |
+|---|---|---:|---:|
+| `modadd_p13_grok` decomp | [169, 26, 32] | ~5 MB | trivial |
+| `modadd_p23_grok` decomp | [529, 46, 48] | ~40 MB | trivial |
+| `modadd_p47_grok` decomp | [2 209, 94, 96] | ~640 MB | ~2 % |
+| Hypothetical `modadd_p113` decomp | [12 769, 226, 256] | ~24 GB | half the card |
+| Hypothetical MNIST at batch 1 024 | [1 024, 784, 256] | ~0.8 GB | trivial |
+
+Wall-time estimate on A40 for the current Day 3 sweep: **a few minutes
+total** across all three configs. Day 4/5 work is almost all small linear
+algebra and lots of einsums — none of it stresses the GPU.
+
+**Where the A40 would actually start to matter:**
+- `modadd_p113` (Nanda's canonical) with full-table training + 4 mask
+  samples uses ~half the card. If you want to push further, drop
+  `mask_samples_per_batch` to 1 or chunk the batch.
+- MNIST extension (theory § 15 lists this as future work): must batch
+  (60 k full-table is too large for per-sample weights). Solvable, just
+  needs a `DataLoader`.
+- A small-LM extension (a tokenized stream + per-token gates) would
+  probably need 1–2 hours of A40 wall.
+
+**Where the A40 doesn't help:**
+- The training loop is inherently sequential — A40 will be sub-1 %
+  utilized on the smaller configs (p13 especially). Don't be surprised.
+- Day 4 atom/cluster perturbation loops are itty-bitty matmuls; the
+  serial Python overhead dominates. CPU would be competitive there.
+
+Bottom line: take the A40 if it's free or cheap. If A40 access is paid
+and you'd otherwise use a T4 (16 GB), the project would still complete
+fine on a T4 — the only configs that wouldn't fit cleanly are the
+hypothetical extensions above.
+
+If `mps` (Apple Metal) is your only option: `select_device("auto")` will
+return `mps`. Most things work but `torch.linalg.eigh` on MPS sometimes
+falls back to CPU silently; that's fine for our 26×26–94×94 matrices.
+
+## 8. Key design decisions (so you don't have to rediscover them)
 
 1. **No persistent PGD.** The spec lists it as optional; nano's
    `PersistentPGD` is ~300 lines of DDP-coupled code. v1 uses pure
@@ -361,7 +406,7 @@ publishable target. Don't start this until Day 4 is committed.
 
 ---
 
-## 8. Gotchas / failure modes
+## 9. Gotchas / failure modes
 
 ### Decomp recon error doesn't drop below 0.1
 
@@ -410,7 +455,7 @@ might be using a stale device — pass `device=device` explicitly.
 
 ---
 
-## 9. Where to push your work
+## 10. Where to push your work
 
 The repo lives at https://github.com/aniket-desh/bilinear-param-decomp .
 You should have push access already (or be in a fork). Commit message style
@@ -435,7 +480,7 @@ When you commit Day 3, update `summary.md` with:
 
 ---
 
-## 10. Aniket's preferences (observed)
+## 11. Aniket's preferences (observed)
 
 - Wants honest reporting of negative results, not just success stories. The
   Day 2 memorization finding was committed prominently rather than hidden;

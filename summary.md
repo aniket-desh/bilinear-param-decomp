@@ -482,11 +482,158 @@ will turn this into causal evidence (or kill it) by:
    tell us whether the "no mechanisms, only shards" finding is an artefact
    of the specific sparsity regime or a robust property.
 
-## Up next — Day 5
+## Day 5 — causal ablation: the aligned atoms are not the load-bearing atoms
 
-- Causal ablations (`scripts/run_ablation.py`): top-aligned cluster vs.
-  random size-matched vs. low-alignment baseline, per probe.
-- Optional sparsity-regime sweep (one run, p13) to disentangle "H3 always"
-  from "H3 at $L_0 \approx 1$ only."
-- LessWrong post draft (`post.md`) with inline plots, following
-  `docs/03_lesswrong_citations_and_style_guide.md`.
+### What landed (code)
+
+- `src/bilinear_spd/ablations.py` — `ablate_weights(decomp, atom_set)`
+  builds $(A_{-S}, B_{-S})$, `evaluate_ablation(...)` runs the perturbed
+  bilinear forward and reports KL, $\Delta\text{acc}$, $\Delta$ margin,
+  and $\Delta\,r^\top y(x)$. Plus `random_size_matched_sets` and
+  `low_alignment_atom_set` for baselines.
+- `scripts/run_ablation.py` — for each probe, pick the top-K (default 5)
+  eigenspaces by atom-MMA from Day 4 and ablate three sets per
+  eigenspace: aligned cluster, random size-matched, low-alignment. Saves
+  CSVs, JSON, and per-probe KL bar plots. **100 random baselines per
+  eigenspace** (per spec § 5.9).
+- `scripts/run_rank_ablation.py` — diagnostic: ablate top-N atoms one at
+  a time, ranked alternately by $\|\Delta M_r\|_F$ (norm) and by
+  $|\text{fro\_cos}|$ to the dominant eigenspace, and plot both KL
+  curves on the same axes. This is the clean "alignment doesn't pick
+  load-bearing atoms" picture.
+- 6 new tests in `tests/test_ablations.py`. Test suite: **31/31 pass**.
+
+### Headline — alignment doesn't predict load-bearing
+
+Per-eigenspace ablation across all three runs (top-5 eigenspaces per
+probe × 6 probes = 30 records per run, mean of single-atom KL on the
+full table; median is used because random's heavy tail dominates the
+mean):
+
+| run | median aligned KL | median random KL | median low-align KL |
+|---|---:|---:|---:|
+| `modadd_p13_grok` | 1.5e-05 | 2.5e-01 | 1.4e-05 |
+| `modadd_p23_grok` | 1.1e-06 | 3.0e-01 | 1.0e-06 |
+| `modadd_p47_grok` | 4.3e-07 | 1.9e-01 | 3.9e-07 |
+
+The **aligned and low-alignment ablations are indistinguishable** —
+both well below random by 5+ orders of magnitude. So the alignment
+metric isn't picking the load-bearing atoms; it picks atoms that look
+cosmetically like eigenspace projectors but carry essentially no causal
+weight. Across all three runs and 30 eigenspace ablations each, the
+aligned-cluster KL was higher than random mean in only 3/30 (p13),
+7/30 (p23), and 1/30 (p47) cases.
+
+### The diagnostic: rank-by-norm vs rank-by-alignment
+
+Single-atom ablation, walking top-K atoms by two orderings:
+
+![p47 rank-ablation diagnostic](runs/modadd_p47_grok_seed0/figures/rank_ablation_centered_0.png)
+
+Orange: rank by $\|\Delta M_r\|_F$ — every one of the top-30 norm atoms
+collapses behaviour ($KL \sim 1.2$, $\Delta\text{acc} \approx -2\%$ per
+ablated atom). Blue: rank by $|\text{fro\_cos}|$ to the top eigenspace —
+KL stays at the floating-point floor for every aligned atom, $\Delta$
+accuracy is exactly 0. The top-10 atoms by norm and the top-10 by
+alignment intersect in only **0–1 atoms** across the three configs:
+
+| run | top-10 atoms overlap (norm ∩ alignment) |
+|---|---:|
+| p13 | 1 / 10 |
+| p23 | 0 / 10 |
+| p47 | 1 / 10 |
+
+So the "best aligned" and "actually load-bearing" atoms are disjoint
+populations.
+
+### What the high-norm atoms actually do — a clean per-row/column shard
+
+Single-atom ablation $\Delta\text{acc}$ for the top-norm atoms is
+strikingly uniform within each run:
+
+| run | top-norm $\Delta$ acc | $\Delta$ acc as fraction | matches |
+|---|---:|---:|---|
+| p13 | −0.0769 | $-10 / 130$ | one row OR column of the $13 \times 13$ table |
+| p23 | −0.0435 | $-23 / 529$ | one row OR column of $23 \times 23$ |
+| p47 | −0.0213 | $-47 / 2209$ | one row OR column of $47 \times 47$ |
+
+Each high-norm atom is causally responsible for exactly *one* row or
+column of the modular-addition lookup table — i.e., for all inputs
+where $a$ (or $b$) takes a specific value. The decomposition has
+learned an "addition-table shard" ontology: roughly $2p$ atoms each
+handle a single value of one argument. That matches the Day 3
+$L_0 \approx 1$ per-sample sparsity finding directly: each input
+$(a, b)$ activates ≈ 1 atom because the gates have specialised to
+"fire when $a = k$" or "fire when $b = k$" patterns.
+
+### Verdict on H1 / H2 / H3
+
+- **H1 (atoms ≈ eigenspaces)**: refuted on both axes —
+  Frobenius-cosine ≤ 0.24, single-atom ablation breaks behaviour only
+  when picking by norm, never by alignment.
+- **H2 (clusters ≈ eigenspaces)**: refuted — the gate co-activation
+  matrix is sparse to the point of triviality (380/384 singletons at
+  $\tau = 0.5$ for p47), and cluster MMA matches atom MMA to three
+  decimals.
+- **H3 (nothing aligns)**: technically true *for the eigenspace
+  recovery target*, but understates the result. The SPD-style
+  decomposition didn't fail to find structure; it found a *different*
+  structure — a per-row/column lookup-table sharding of the $p \times p$
+  table — that is real, causal, and basis-independent in its own way,
+  just not the eigenspace decomposition the theory predicted.
+
+The whole pipeline is *internally* doing the right thing: the bilinear
+MLP groks, $M_r$ has clean degenerate Fourier-flavored eigenspaces,
+the decomposition has $\sim 10^{-5}$ parameter reconstruction error
+and $\sim 10^{-4}$ behaviour KL. It's the implicit assumption — that
+rank-one parameter atoms with $L_0 \approx 1$ stochastic-mask
+sparsity-regularised gates would converge to functional eigenspaces —
+that fails. Day 5's twist is that the same training run converges
+*reliably* to a different, also-interesting, equally-mechanistic
+ontology.
+
+### What this benchmark *did* answer
+
+For one architecture (bilinear MLP), one task (modular addition,
+$p \in \{13, 23, 47\}$), and one decomposition method (SPD-style
+rank-one gated, no PPGD, $L_0 \approx 1$):
+
+1. Probe-conditioned $M_r$ eigenspaces are well-defined and
+   Fourier-flavored after grokking (Day 2.5).
+2. A 4-term-loss SPD-style decomposition converges cleanly: behaviour
+   KL $\sim 10^{-4}$, parameter recon $\sim 10^{-5}$, gates very sparse
+   ($L_0 \sim 1$ active per input) (Day 3).
+3. Atoms align with eigenspaces above random baseline by $1.6 - 2.2 \times$
+   ($25 - 56 \sigma$), but absolute alignment caps at 0.10 – 0.24 (Day 4).
+4. Causal ablation: the *most-aligned* atoms are *not* load-bearing —
+   ablating them affects behaviour 5+ orders of magnitude less than
+   ablating high-norm atoms. The actual mechanism is per-row/column
+   lookup-table shards (Day 5).
+
+### Limitations + next obvious experiments
+
+- **One sparsity regime.** Everything here is at $\lambda_\text{sparsity} = 10^{-3}$.
+  Lower sparsity might prevent the shard collapse and give atoms a
+  chance to look more eigenspace-like. (Quick test: re-train p13 at
+  $\lambda_\text{sparsity} = 10^{-4}$ and check the alignment numbers.)
+- **One decomposition family.** SPD with stochastic masks. The same
+  question could be asked of Persistent-PGD (deferred per Day 3 design
+  note § 1), VPD-style with different atom shape, or attribution-based
+  decompositions. None of those would necessarily collapse to shards.
+- **One target.** Modular addition is special — it has a clean Fourier
+  algorithm. A bilinear MLP trained on a less structured task
+  (e.g., a small XOR-of-features classification) might not have
+  Fourier-flavored eigenspaces to begin with, in which case "do atoms
+  align with eigenspaces?" is the wrong question.
+- **Gate-correlation clustering is brittle in this regime.** With
+  $L_0 \sim 1$ deterministic gates, the correlation matrix is sparse
+  by construction — no clustering threshold could have found anything.
+  A future post should ablate that and try other co-activation
+  groupings (e.g., spectral clustering of the gate Gram matrix).
+
+The LessWrong post (`post.md`) writes this up for an outside audience.
+
+## Up next — done
+
+This commit closes out the project's Days 1–5. Successor work directions
+are in the "Limitations + next obvious experiments" section above.

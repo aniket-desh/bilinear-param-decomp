@@ -203,6 +203,138 @@ def plot_decomposition_curves(
     plt.close(fig)
 
 
+# --- Day 4: alignment heatmaps ---
+
+
+def plot_alignment_heatmaps(
+    align_atoms: torch.Tensor,
+    align_clusters: torch.Tensor,
+    out_path: str | Path,
+    title: str | None = None,
+    summary_text: str | None = None,
+) -> None:
+    """Side-by-side heatmaps: atoms × eigenspaces and clusters × eigenspaces.
+
+    Rows (atoms / clusters) are sorted by max alignment descending so the
+    "obvious" diagonal — well-aligned atoms next to their best eigenspace —
+    shows up at the top. Columns (eigenspaces) are in mean-|λ| descending
+    order, matching the spectrum plot's convention.
+    """
+    apply_style()
+    A = align_atoms.detach().cpu().numpy()
+    Cc = align_clusters.detach().cpu().numpy()
+
+    # sort rows by max alignment desc
+    a_idx = np.argsort(-A.max(axis=1))
+    c_idx = np.argsort(-Cc.max(axis=1))
+    A_sorted = A[a_idx]
+    C_sorted = Cc[c_idx]
+
+    fig, axes = plt.subplots(1, 2, figsize=(11.5, 5.6))
+    vmax = float(max(A_sorted.max(), C_sorted.max(), 1.0))
+    for ax, M, label in zip(axes, [A_sorted, C_sorted], ["atoms", "clusters"]):
+        im = ax.imshow(M, cmap="magma", vmin=0.0, vmax=vmax, aspect="auto")
+        ax.set_xlabel("eigenspace (|λ| desc)")
+        ax.set_ylabel(f"{label} (max-align desc)")
+        ax.set_title(f"{label} × eigenspaces")
+        ax.grid(False)
+        fig.colorbar(im, ax=ax, fraction=0.04, pad=0.02, label="|cos|")
+
+    if summary_text is not None:
+        fig.text(0.5, -0.02, summary_text, ha="center", va="top", fontsize=10)
+
+    if title is not None:
+        fig.suptitle(title, y=1.02)
+    fig.tight_layout()
+    fig.savefig(out_path)
+    plt.close(fig)
+
+
+def plot_alignment_bars(
+    atom_mma_by_probe: dict,
+    cluster_mma_by_probe: dict,
+    out_path: str | Path,
+    title: str | None = None,
+    baseline_by_probe: dict | None = None,
+) -> None:
+    """Per-probe paired bars: atom MMA vs cluster MMA vs random-baseline MMA.
+
+    The headline H1/H2/H3 comparison: do atoms/clusters meaningfully beat a
+    random size-matched "decomposition" at covering eigenspaces? Each
+    baseline entry should be a dict with `eig_coverage_mean` (+ optional
+    `eig_coverage_std` for the errorbar).
+    """
+    apply_style()
+    probes = list(atom_mma_by_probe.keys())
+    x = np.arange(len(probes))
+    atom_vals = [atom_mma_by_probe[p] for p in probes]
+    cluster_vals = [cluster_mma_by_probe[p] for p in probes]
+
+    fig, ax = plt.subplots(figsize=(1.5 + 1.1 * len(probes), 4.2))
+    if baseline_by_probe is not None:
+        rand_mean = [baseline_by_probe[p]["eig_coverage_mean"] for p in probes]
+        rand_std = [baseline_by_probe[p].get("eig_coverage_std", 0.0) for p in probes]
+        width = 0.26
+        ax.bar(x - width, atom_vals, width, color=COLORS["blue"], label="atoms")
+        ax.bar(x, cluster_vals, width, color=COLORS["orange"], label="clusters")
+        ax.bar(x + width, rand_mean, width, yerr=rand_std, color=COLORS["gray"],
+               capsize=3, label="random size-matched (mean ± std)")
+    else:
+        width = 0.36
+        ax.bar(x - width / 2, atom_vals, width, color=COLORS["blue"], label="atoms")
+        ax.bar(x + width / 2, cluster_vals, width, color=COLORS["orange"], label="clusters")
+    ax.set_xticks(x)
+    ax.set_xticklabels(probes, rotation=30, ha="right", fontsize=9)
+    ax.set_ylabel("mean max alignment (eigenspace coverage)")
+    ax.set_ylim(0.0, max(1.0, max(atom_vals + cluster_vals) * 1.1))
+    ax.legend(loc="upper right", frameon=False, fontsize=9)
+    if title is not None:
+        ax.set_title(title)
+    fig.tight_layout()
+    fig.savefig(out_path)
+    plt.close(fig)
+
+
+# --- Day 5: ablation comparison ---
+
+
+def plot_ablation_bars(
+    rows: list[dict],
+    out_path: str | Path,
+    title: str | None = None,
+) -> None:
+    """Bar chart of $\\Delta$KL for {aligned cluster, random size-matched, low-align}.
+
+    `rows` is a list of dicts with keys:
+      eigenspace (str), kl_aligned, kl_random_mean, kl_random_std, kl_low_align.
+    Sorted by aligned-cluster KL descending.
+    """
+    apply_style()
+    rows = sorted(rows, key=lambda r: -r["kl_aligned"])
+    labels = [r["eigenspace"] for r in rows]
+    aligned = [r["kl_aligned"] for r in rows]
+    rand_mean = [r["kl_random_mean"] for r in rows]
+    rand_std = [r["kl_random_std"] for r in rows]
+    low = [r["kl_low_align"] for r in rows]
+
+    x = np.arange(len(rows))
+    width = 0.28
+    fig, ax = plt.subplots(figsize=(0.7 * len(rows) + 2.5, 4.5))
+    ax.bar(x - width, aligned, width, color=COLORS["orange"], label="aligned cluster")
+    ax.bar(x, rand_mean, width, yerr=rand_std, color=COLORS["gray"],
+           capsize=3, label="random size-matched (mean ± std)")
+    ax.bar(x + width, low, width, color=COLORS["blue"], label="low-alignment cluster")
+    ax.set_xticks(x)
+    ax.set_xticklabels(labels, rotation=30, ha="right", fontsize=9)
+    ax.set_ylabel(r"$\Delta$ KL (ablated vs full)")
+    ax.legend(loc="upper right", frameon=False, fontsize=9)
+    if title is not None:
+        ax.set_title(title)
+    fig.tight_layout()
+    fig.savefig(out_path)
+    plt.close(fig)
+
+
 # --- Day 2: functional analysis ---
 
 

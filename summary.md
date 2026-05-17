@@ -349,10 +349,144 @@ tests/test_decomposition.py             .....  [5]
 14 passed
 ```
 
-## Up next — Day 4
+## Day 4 — atom/cluster vs. eigenspace alignment
 
-- `analysis.py`: per-atom and per-cluster $\Delta M_r$.
-- `metrics.py`: $|\text{Frobenius cosine}|$ and projector-energy alignment.
-- `clustering.py`: gate-correlation threshold-CC clustering.
-- `run_alignment.py`: produce atom×eigenspace and cluster×eigenspace
-  heatmaps + the H1/H2/H3 mean-max-alignment number per probe.
+### What landed (code)
+
+- `src/bilinear_spd/analysis.py` — `atom_perturbations(decomp, r)` builds
+  $\Delta M_r(\{c\}) = M_r(A, B, C) - M_r(A - \Delta A_c, B - \Delta B_c, C)$ for
+  each atom and `cluster_perturbations(decomp, r, clusters)` does the
+  bilinear-cross-term-correct version for clusters (sums atoms into the
+  weights before constructing $M_r$).
+- `src/bilinear_spd/metrics.py` — `fro_cos`, `signed_fro_cos`,
+  `projector_energy`, `mean_max_alignment` (with explicit `axis`
+  kwarg so the two MMA readings — "eigenspace coverage" and "per-atom
+  best" — don't get confused at the call site).
+- `src/bilinear_spd/clustering.py` — `gate_corr` (Pearson on stacked
+  $[g_A \,|\, g_B]$, dead atoms zeroed) and `threshold_components` (BFS
+  connected components of the $|\text{corr}| > \tau$ graph).
+- `scripts/run_alignment.py` — per-probe alignment matrices, CSVs,
+  heatmaps, threshold sweep, and a random size-matched baseline (32 trials
+  of symmetric Gaussian $\Delta M$ at the same shape).
+- 3 new test files: `test_metrics.py` (4 tests, projector invariants),
+  `test_clustering.py` (3 tests), and `test_perturbation_expansion.py` (3
+  tests covering theory § 7.2's identity and the cluster cross-term).
+
+Test suite: **25/25 pass** (14 prior + 11 new).
+
+### The headline number — mean-max-alignment by probe (eigenspace coverage)
+
+For each probe $r$ we compute the $|\text{Frobenius cosine}|$ of each
+atom's $\Delta M_r$ against each eigenspace projector $P_\lambda$, giving an
+`[n_atoms × n_eigenspaces]` matrix. The spec's
+`mean_max_alignment(matrix.T)` summary — for each eigenspace, take the
+best-aligned atom, then average over eigenspaces — gives one number per
+probe: "is every eigenspace covered by at least one atom?" The same
+quantity computed against a random size-matched symmetric $\Delta M$ is
+the chance baseline.
+
+| run | $d$ | n eigenspaces (centered_0) | atom MMA | cluster MMA | random MMA | ratio (atom/rand) | atom-baseline z |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| `modadd_p13_grok` | 26 | 23 | **0.244** | 0.244 | 0.150 ± 0.003 | 1.6× | ≈ 25σ |
+| `modadd_p23_grok` | 46 | 41 | **0.144** | 0.144 | 0.090 ± 0.002 | 1.6× | ≈ 30σ |
+| `modadd_p47_grok` | 94 | 65 | **0.103** | 0.103 | 0.047 ± 0.001 | 2.2× | ≈ 56σ |
+
+(Numbers are for the `centered_0` probe; other probes vary by <0.02
+in absolute MMA and produce the same atoms-vs-clusters-vs-random
+ordering. Full per-probe records are in
+`runs/*/reports/alignment_summary.json`.)
+
+Two clean readings of this table:
+
+1. **Atoms beat random by a factor of 1.6–2.2× with high statistical
+   significance (25σ–56σ over the random-baseline distribution).** So the
+   SPD-style decomposition is recovering *something* mechanistically tied
+   to the bilinear eigenspaces — it's not pure noise.
+2. **Cluster MMA equals atom MMA to 3 decimals.** The gate-correlation
+   clustering finds essentially nothing — at $\tau = 0.5$, $p = 47$ still
+   has 380/384 atoms as singletons. So the H2 hypothesis ("clusters
+   recover what atoms can't") fails — atoms simply don't co-activate.
+
+But absolute alignments cap at 0.24 (p13), 0.16 (p23), 0.11 (p47), well
+short of 1.0. **The atoms are *not* reproducing the eigenspaces on their
+own either.** The signal we see is "atoms partially overlap with
+eigenspaces" not "atoms recover eigenspaces" — meaningful but modest.
+
+### The atom-vs-cluster bar chart, p47
+
+![p47 alignment bars](runs/modadd_p47_grok_seed0/figures/alignment_mma_by_probe.png)
+
+Blue = atoms, orange = clusters (essentially identical), gray = random
+size-matched baseline with std bars. Clusters never beat atoms; atoms
+always beat the baseline by ~2× across all six probes.
+
+### The atom × eigenspace heatmap, p47 centered_0
+
+![p47 alignment heatmap centered_0](runs/modadd_p47_grok_seed0/figures/alignment_centered_0.png)
+
+Atoms are sorted by max alignment desc (top = best-aligned atom). Even
+the top rows reach only ~0.2 on the colourmap — no atom paints a clean
+horizontal band, and no eigenspace gets a clean vertical band. Contrast
+this with H1, which would show a near-diagonal of dark squares.
+
+### Why so sparse — the gate-correlation thumbnail
+
+The threshold sweep tells the same story from the gate side:
+
+| $\tau$ | p13 clusters | p23 clusters | p47 clusters |
+|---:|---:|---:|---:|
+| 0.5 | 119 (113 singletons, 6 ≥ 2) | 189 (186, 3 ≥ 2) | 382 (380, 2 ≥ 2) |
+| 0.7 | 123 (119, 4 ≥ 2) | 190 (188, 2 ≥ 2) | 384 (384, 0 ≥ 2) |
+| 0.9 | 125 (123, 2 ≥ 2) | 190 (188, 2 ≥ 2) | 384 (384, 0 ≥ 2) |
+
+At $\tau = 0.5$, p47 has 380/384 atoms as singletons. The atoms are
+near-orthogonal in their gate-vector co-activations across the 2 209
+inputs. Combined with the Day 3 finding that $L_0 \approx 1$ per sample,
+the decomposition seems to have organised itself as **a near-orthogonal
+per-input "shard" set rather than a small mechanism set** — each atom
+fires on a small, distinctive sub-region of input space and rarely
+co-activates with another atom.
+
+### Interpretation under H1 / H2 / H3
+
+Adopting the trichotomy from `PASS_OFF.md` § 0 and the theory doc:
+
+- **H1 (atoms ≈ eigenspaces)**: ruled out — alignment caps at 0.24 / 0.16 / 0.11
+  for $p \in \{13, 23, 47\}$, well below the H1 "near-1" expectation.
+- **H2 (clusters ≈ eigenspaces, atoms alone don't)**: ruled out — the gate
+  co-activation graph is sparse to the point of triviality, and cluster MMA
+  ≈ atom MMA to three decimals across all probes.
+- **H3 (nothing aligns)**: weakened-but-not-killed — atoms beat the random
+  baseline by 1.6–2.2× at 25–56σ, so something is being recovered. But it
+  is not the eigenspace structure the theory expects.
+
+The most consistent reading: **the rank-one ontology learned under
+$L_0 \approx 1$ stochastic-mask SPD captures sample-specific weight slices,
+not basis-independent functional mechanisms**. Whether that's a property of
+the SPD training regime, of the specific hyper-parameters
+($\lambda_\text{sparsity} = 10^{-3}$, $C = 2 d_\text{hidden}$), or a fundamental
+mismatch between rank-one parameter atoms and rank-r symmetric eigenspaces is
+the Day 5 ablation question.
+
+### What Day 5 will pin down
+
+The 1.6–2.2× over-baseline signal is real; it just isn't *complete*. Day 5
+will turn this into causal evidence (or kill it) by:
+
+1. **Ablating the top-aligned cluster vs. random size-matched clusters vs.
+   low-alignment clusters of the same size**, and measuring $\Delta\text{KL}$
+   on full-table behaviour. If aligned-cluster ablation is no worse than
+   random, the 2× signal is a numeric coincidence and H3 wins outright.
+2. **Sensitivity sweep** over $\lambda_\text{sparsity}$ — at lower
+   $\lambda_\text{sparsity}$ the gates would be less saturated; that would
+   tell us whether the "no mechanisms, only shards" finding is an artefact
+   of the specific sparsity regime or a robust property.
+
+## Up next — Day 5
+
+- Causal ablations (`scripts/run_ablation.py`): top-aligned cluster vs.
+  random size-matched vs. low-alignment baseline, per probe.
+- Optional sparsity-regime sweep (one run, p13) to disentangle "H3 always"
+  from "H3 at $L_0 \approx 1$ only."
+- LessWrong post draft (`post.md`) with inline plots, following
+  `docs/03_lesswrong_citations_and_style_guide.md`.

@@ -1,5 +1,11 @@
 # Pass-off: bilinear-spd-benchmark, Day 3 onward
 
+> **Status (2026-05-17):** Days 3, 4, and 5 are complete and pushed. See
+> [`summary.md`](summary.md) for the running progress log with figures, and
+> [`post.md`](post.md) for the LessWrong-style writeup. The instructions
+> below were the original handoff and are kept for reference / historical
+> context, but the project is no longer in a "Day 3 not yet run" state.
+
 You are picking up a partially-complete mini-research project. Your job is to
 **finish Day 3 (decomposition training on the three grokked checkpoints)** and
 then start Day 4 (atom/cluster alignment vs eigenspaces). You have GPU access;

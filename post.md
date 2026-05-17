@@ -3,14 +3,15 @@
 **Epistemic status:** Small controlled experiment on a single architecture
 (bilinear MLP), a single task (modular addition, $p \in \{13, 23, 47\}$),
 and a single decomposition method (a minimal SPD-style rank-one gated
-decomposition with $L_0 \approx 1$ per input). The "ground truth" used is
-probe-conditioned — for a chosen output direction $r$, the bilinear MLP
-induces an exact quadratic form $x^\top M_r x$, and the eigenspaces of
-$M_r$ are a canonical functional decomposition of *that scalar probe*,
-not of the whole model. I think the benchmark setup is more interesting
-than the particular numbers below; the result needs more sparsity-regime
-sweeps and other decomposition families before any of it should be
-generalised. Code is at <https://github.com/aniket-desh/bilinear-param-decomp>.
+decomposition). The "ground truth" used is probe-conditioned — for a
+chosen output direction $r$, the bilinear MLP induces an exact quadratic
+form $x^\top M_r x$, and the eigenspaces of $M_r$ are a canonical
+functional decomposition of *that scalar probe*, not of the whole model.
+I think the benchmark setup is more interesting than the particular
+numbers below; the result is shown to be stable across a sparsity-pressure
+sweep but still needs other decomposition families (PPGD, VPD-style) and
+other tasks before any of it should be generalised. Code is at
+<https://github.com/aniket-desh/bilinear-param-decomp>.
 
 ## TL;DR
 
@@ -19,15 +20,17 @@ exact probe-conditioned interaction matrices $M_r$, eigendecomposed them,
 and trained a minimal SPD-style rank-one gated parameter decomposition
 on the bilinear weights $(A, B)$. The decomposition converges cleanly
 (behaviour KL $\sim 10^{-4}$, relative parameter reconstruction
-$\sim 10^{-5}$, gate $L_0 \sim 1$ active atom per input).
+$\sim 10^{-5}$, with $\approx 1$ atom having a non-negligible
+deterministic gate per input).
 
-I then asked the central question: do its atoms — or clusters of
-co-active atoms — line up with the eigenspaces of $M_r$? The
-short answer is **no, not in any useful sense, and also yes in a way
-that turns out to be misleading**:
+I expected one of two outcomes: either atoms or clusters of co-active
+atoms would recover the eigenspaces of $M_r$. **Neither happened.**
+Instead the decomposition reliably converges to a different — and
+also-interpretable — ontology:
 
 - Atoms beat a random size-matched baseline at Frobenius-cosine
-  alignment by $1.6 - 2.2\times$ ($25 - 56\sigma$).
+  alignment by $1.6 - 2.2\times$ ($25 - 56\sigma$), but absolute
+  alignment caps at $0.10 - 0.24$.
 - Clusters add nothing — gate co-activation is sparse to the point of
   triviality, and cluster MMA equals atom MMA to three decimals.
 - **Causally**, the most-aligned atoms are *not* the load-bearing ones.
@@ -35,12 +38,24 @@ that turns out to be misleading**:
   KL by $\sim 10^{-7}$; ablating the high-$\|\Delta M_r\|_F$ atoms
   instead changes KL by $\sim 1.2$ and removes accuracy on exactly one
   row or column of the $p \times p$ lookup table per atom.
+- A sparsity-pressure sweep on $p = 13$ across
+  $\lambda_s \in \{10^{-2}, 10^{-3}, 10^{-4}, 10^{-5}, 0\}$ shows the
+  shard ontology is **not** an artefact of the sparsity penalty — it
+  appears across all five settings.
 
-So the rank-one decomposition recovered something real — a per-row /
-per-column **shard** of the addition table — that just isn't the
-eigenspace structure the theory suggested. The benchmark gave a
-negative answer to a specific question and an interesting positive
-answer to a question I wasn't asking.
+The headline:
+
+> **Faithful parameter atoms need not be functional mechanisms.** A
+> rank-one gated decomposition can be behaviourally faithful,
+> parameter-faithful, and causally interpretable — and still pick a
+> different ontology from the model's spectral functional decomposition.
+
+In this bilinear MLP the SPD-style decomposition learned an
+input-table **shard** ontology — each high-norm atom carries one row or
+column of the $p \times p$ lookup table — instead of the Fourier-like
+$M_r$-eigenspace ontology that the theory pointed at. This is an
+*ontology mismatch* between parameter-space faithfulness and
+function-space spectral structure, not a failure of either side.
 
 ## Why I cared about this
 
@@ -146,14 +161,18 @@ for that reason.
 
 **Task.** Modular addition $(a + b) \bmod p$ for $p \in \{13, 23, 47\}$.
 The input is the concatenation of one-hot encodings of $a$ and $b$, so
-$d_\text{in} = 2p$. The output is a $p$-way softmax. With weight decay
-1.0 and small initialisation, the model groks: train accuracy hits
-1.0 fast, weight norm rises then drops, and within a few thousand
-steps $M_r$ develops large degenerate eigenspaces of (visibly)
-Fourier-flavored eigenvectors. This is the regime where the
-$p \times p$ addition table is computed algorithmically rather than
-memorised — the standard [Nanda et al.](https://arxiv.org/abs/2301.05217)
-setup, just on a bilinear MLP.
+$d_\text{in} = 2p$. The output is a $p$-way softmax.
+
+I train the bilinear MLP in a *grokking-friendly* regime: small
+initialisation ($\sigma = 0.02$), strong weight decay ($1.0$), no
+accuracy-based early stop, full-table batches. This is a deliberate
+choice — the benchmark only makes sense if $M_r$ has nontrivial
+functional structure to compare against, and the grokking regime is
+the one in which a bilinear MLP develops Fourier-like algorithmic
+structure (the standard
+[Nanda et al.](https://arxiv.org/abs/2301.05217) setup). After
+training, $M_r$ has many degenerate eigenspaces and the leading
+eigenvectors are visibly periodic across the two input slots.
 
 For p47 the spectrum looks like this:
 
@@ -202,16 +221,22 @@ an RTX A6000, full-table batches, AdamW lr = 10⁻³,
 $\lambda_b = \lambda_A = \lambda_B = 1$, $\lambda_s = \lambda_f = 10^{-3}$.
 All three runs hit the spec acceptance criteria comfortably:
 
-| run | $C_A = C_B$ | KL | recon $A$ | recon $B$ | $L_0$ (mean active gates / sample) |
+| run | $C_A = C_B$ | KL | recon $A$ | recon $B$ | mean #gates > $10^{-3}$ per sample |
 |---|---:|---:|---:|---:|---:|
 | `modadd_p13_grok` | 64 | 5.6×10⁻⁴ | 1.4×10⁻⁵ | 1.2×10⁻⁵ | 1.24 / 64 |
 | `modadd_p23_grok` | 96 | 2.3×10⁻⁴ | 1.3×10⁻⁵ | 1.7×10⁻⁵ | 1.11 / 96 |
 | `modadd_p47_grok` | 192 | 4.2×10⁻⁴ | 1.6×10⁻⁵ | 1.3×10⁻⁵ | 1.04 / 192 |
 
-That $L_0 \approx 1$ per input — across all three configs, despite
-$C$ varying by 3× — is the first hint that something interesting is
-going on. We expected $\sim 5 - 20$ active atoms per eigenspace; the
-decomposition instead found a way to use one atom per input.
+The right-most column is the deterministic gate $L_0$ — the average
+number of atoms with $g_c(x) > 10^{-3}$ per input. Note that during
+training the actual per-input mask is *stochastic*,
+$m_c = g_c + (1 - g_c) U(0, 1)$, so a gate near zero is not literally
+absent; it's "if I drop you on this input, the model still works."
+But across all three configs, only $\approx 1$ atom has a
+non-negligible deterministic gate on any given input, despite $C$
+varying by 3×. We expected $\sim 5 - 20$ atoms per eigenspace; the
+decomposition instead found a way to mark only one atom as
+behaviourally important per input.
 
 ## Alignment results — atoms beat baseline, clusters don't help
 
@@ -257,10 +282,10 @@ heatmap caps around 0.2 on the colourmap.
 Why doesn't clustering help? Because in this regime the atoms are
 *nearly orthogonal* in their co-activation pattern. At correlation
 threshold $\tau = 0.5$, p47 has 380 / 384 atoms as singletons; even
-$\tau = 0.6$ leaves only 2 nontrivial clusters of size 2. With
-$L_0 \approx 1$ atom active per sample and 2 209 inputs, each atom
-fires on a small, distinctive subset and rarely co-activates with
-another atom.
+$\tau = 0.6$ leaves only 2 nontrivial clusters of size 2. With only
+$\approx 1$ atom carrying a non-trivial deterministic gate per
+sample, and 2 209 inputs, each atom fires on a small, distinctive
+subset and rarely co-activates with another atom.
 
 At this point the picture would suggest "H3 — nothing aligns", with
 a footnote that the 1.6–2.2× over-baseline signal is statistically
@@ -334,7 +359,7 @@ $\Delta\text{acc}$ is suspiciously consistent within each run:
 
 | run | top-norm $\Delta$acc | $-\Delta\text{acc} \times p^2$ | what this is |
 |---|---:|---:|---|
-| p13 | −0.0769 | $\approx 10$ | one row of a $13 \times 13$ table (10 inputs flipped — within rounding of $p = 13$) |
+| p13 | −0.0769 | $= 13$ | exactly one row or column of $13 \times 13$ |
 | p23 | −0.0435 | $= 23$ | exactly one row or column of $23 \times 23$ |
 | p47 | −0.0213 | $= 47$ | exactly one row or column of $47 \times 47$ |
 
@@ -343,14 +368,67 @@ column of the modular-addition lookup table — i.e., for all $(a, b)$
 pairs where $a$ takes a specific value, or where $b$ takes a specific
 value. The decomposition has learned an "addition-table shard"
 ontology: roughly $2p$ atoms each handle one value of one argument,
-and the remaining atoms are residual decoration. That matches the
-$L_0 \approx 1$ per-sample sparsity exactly: each input $(a, b)$ has
-one "row-of-$a$ atom" and / or one "column-of-$b$ atom" responsible
-for it, and the gate fires when its input value appears.
+and the remaining atoms are residual decoration.
+
+We can see the shards directly. For the top-12 atoms by
+$\|\Delta M_r\|_F$ on p47, the deterministic gate $g_c(a, b)$ over
+the input grid:
+
+![p47 gate-heatmap, top-12 atoms by norm](runs/modadd_p47_grok_seed0/figures/gate_grid_top_norm_centered_0.png)
+
+Each panel is a clean horizontal stripe (a row of constant $a$) or
+vertical stripe (a column of constant $b$) — the atom fires whenever
+one of the two input arguments takes a particular value. The
+matching per-input ablation-error mask is just as clean:
+
+![p47 ablation-error masks, top-12 atoms by norm](runs/modadd_p47_grok_seed0/figures/ablation_mask_top_norm_centered_0.png)
+
+Red cells are inputs where the model's prediction flips after the
+atom is surgically removed. Each high-norm atom kills exactly the
+inputs where its gated stripe lives — and only those inputs.
+
+(In this particular seed the very top-norm atoms happen to be
+dominated by row-shards; column-shards exist too but appear lower
+in the ranking. Across the top-40 p47 atoms the rough split is 32
+row, 7 column, 1 mixed.)
+
+## Is the shard ontology forced by the sparsity penalty?
+
+The obvious objection: maybe $\lambda_s = 10^{-3}$ pushed the gates
+into a near-singleton regime, and that's what made the decomposition
+look like shards. To check, I re-trained the p13 decomposition five
+times against the same frozen bilinear MLP at
+$\lambda_s \in \{10^{-2}, 10^{-3}, 10^{-4}, 10^{-5}, 0\}$ and re-ran
+alignment + ablation each time.
+
+![p13 sparsity sweep — MMA and ablation KL vs lambda_s](runs/modadd_p13_grok_seed0/figures/sparsity_sweep.png)
+
+The shard ontology is stable across the sweep:
+
+- Atom mean-max-alignment stays at $0.25 - 0.27$ across all five
+  $\lambda_s$ values — about $1.7\times$ the random baseline of
+  $\sim 0.15$, never close to 1.
+- Median aligned-cluster ablation KL stays at $\sim 10^{-5}$ across
+  all settings; the random-atom median (averaged across each
+  eigenspace's 50 random trials, then median across eigenspaces)
+  stays at $\sim 0.2$. The alignment-vs-causality gap is robust to
+  the sparsity knob to within an order of magnitude.
+- Mean deterministic gates per input rises modestly from $\sim 2.1$
+  (highest sparsity) to $\sim 2.8$ (no penalty), and the
+  $|\text{corr}| > 0.5$ co-activation fraction grows correspondingly
+  — but the *load-bearing* atoms remain a small set of high-norm
+  "row/column" atoms in every setting, and atom-MMA is unchanged.
+
+So removing the sparsity pressure entirely doesn't recover the
+eigenspace ontology — the shard solution is what this decomposition
+converges to in this setup, not an artefact of one $\lambda_s$ choice.
+That doesn't rule out more aggressive interventions (different
+architecture for the gate net, PPGD, rank-$r$ atoms) preventing the
+collapse, but it does rule out the simplest "you forced it" objection.
 
 ## Interpretation
 
-The benchmark gives a fairly clean verdict on the three hypotheses:
+The benchmark gives a clean verdict on the three hypotheses:
 
 - **H1 (atoms ≈ eigenspaces): refuted.** Alignment caps at 0.10 – 0.24,
   far short of "atom is the eigenspace projector". More importantly,
@@ -360,25 +438,30 @@ The benchmark gives a fairly clean verdict on the three hypotheses:
   matrix is essentially the identity in this regime, so clustering
   produces almost only singletons, and the cluster MMA equals the
   atom MMA to three decimals.
-- **H3 (nothing aligns): technically true for the eigenspace target.**
-  But the bare H3 framing understates the result. The decomposition
-  isn't *failing* to find structure; it's finding a *different*
-  structure — a per-row/column lookup-table shard of the $p \times p$
-  table — that is real, causal, basis-independent in its own way, and
-  not the eigenspace decomposition the theory predicted.
+- **H3 (nothing aligns): technically true for the eigenspace target,
+  but the framing misses the point.** The decomposition didn't *fail*
+  to find structure. It found a *different* structure — a
+  per-row/column lookup-table shard of the $p \times p$ table — that
+  is real, causal, basis-independent in its own way, and stable
+  across a sparsity sweep, just not the eigenspace decomposition the
+  theory pointed at.
 
-I think the most honest framing is: **in this regime, the rank-one
-ontology converges to lookup-table shards, not to functional
-mechanisms, even though the model in question has a clean Fourier-flavored
-functional mechanism that the eigendecomposition of $M_r$ recovers
-exactly.** The alignment-vs-eigenspace metric *almost-works* — the
-1.6–2.2× over-baseline signal is statistically real and the same atoms
+The cleanest framing I can give:
+
+> I expected H1 (atom ↔ eigenspace) or H2 (cluster ↔ eigenspace).
+> Instead the decomposition converged to **row/column shards**: a
+> causal, sparse, input-local ontology that is not the
+> Fourier/eigenspace ontology of the bilinear function. This is an
+> ontology mismatch between parameter-space faithfulness and
+> function-space spectral structure, not a failure of either side.
+
+The alignment-vs-eigenspace metric *almost-works* — the
+1.6–2.2× over-baseline signal is statistically real, and the same atoms
 do have non-trivial Frobenius overlap with the eigenspaces — but
-"the atoms with the highest Frobenius cosine to a given eigenspace
+"the atoms with the highest Frobenius cosine to an eigenspace
 projector" is not the same set as "the atoms that *implement* that
-eigenspace's functional contribution to the bilinear product".
-
-The shard-vs-mechanism mismatch is the place where the parameter
+eigenspace's functional contribution to the bilinear product". The
+shard-vs-mechanism mismatch is the place where the parameter
 decomposition and the functional decomposition pull apart.
 
 ## What this benchmark does and doesn't show
@@ -387,10 +470,12 @@ It shows:
 
 - a clean, end-to-end-reproducible setup for asking the parameter-vs-function
   alignment question on a model with a known functional ontology;
-- that in *this* particular sparsity regime ($\lambda_s = 10^{-3}$,
-  $C = 2 d_\text{hidden}$, $L_0 \approx 1$ per input, stochastic-mask
-  SPD without PPGD), the rank-one decomposition reliably converges to
-  lookup-table shards;
+- that in this decomposition family ($C = 2 d_\text{hidden}$,
+  stochastic-mask SPD without PPGD), and across
+  $\lambda_\text{sparsity} \in \{10^{-2}, 10^{-3}, 10^{-4}, 10^{-5}, 0\}$,
+  the rank-one decomposition reliably converges to lookup-table
+  shards — the shard ontology is *not* an artefact of a single
+  sparsity choice;
 - that geometric alignment to eigenspace projectors is a *real but
   insufficient* signal of mechanism recovery — the same atoms that
   score highest on it are not the same atoms that carry the
@@ -412,15 +497,11 @@ It does not show:
 
 ## Limitations
 
-- **One sparsity regime.** $\lambda_\text{sparsity} = 10^{-3}$ was the
-  config's default; everything above is downstream of that single
-  choice. A sensitivity sweep over $\lambda_s$ is the most obvious
-  next experiment.
 - **No PPGD.** Goodfire's `nano_param_decomp` includes a
   Persistent-PGD path that adversarially searches the mask space.
   This benchmark uses pure stochastic masks. PPGD might prevent the
   shard collapse and give the atoms a chance to look more
-  eigenspace-like.
+  eigenspace-like; the sparsity sweep above doesn't speak to it.
 - **One decomposition family.** I didn't implement VPD-style
   subcomponent training or attribution-based decompositions; those
   could plausibly produce different atoms.
@@ -432,17 +513,19 @@ It does not show:
   inner product $\langle \Delta M_r, P \rangle_x = \mathbb E_x [x^\top \Delta M_r x \cdot x^\top P x]$
   might be more meaningful, since it weights the projector overlap by
   where inputs actually live. I didn't try it.
-- **Gate-correlation clustering is brittle at $L_0 \approx 1$.** With
+- **Gate-correlation clustering is brittle in this regime.** With
   near-singleton gates the correlation matrix is sparse by
   construction; spectral clustering on the gate Gram matrix or
   Jaccard on gate supports would be more reasonable tries.
+- **One seed.** Everything is at `seed = 0`. The shard pattern is
+  unlikely to be seed-specific given how clean it is, but I didn't
+  verify.
 
 ## What I'd try next
 
-- Sparsity sweep at p13: re-train at $\lambda_s \in \{10^{-2}, 10^{-3}, 10^{-4}, 10^{-5}\}$
-  and see whether the H3 result is stable or whether atoms become
-  more eigenspace-like at lower sparsity (or break completely).
-- Persistent-PGD: drop in nano's PPGD path and re-run alignment.
+- Persistent-PGD: drop in nano's PPGD path and re-run alignment. This
+  is the most direct test of whether the shard collapse is specific
+  to pure stochastic-mask training.
 - Rank-$r$ block-term atoms: replace rank-one $u_c v_c^\top$ with
   rank-$r$ blocks. This directly addresses the type-signature mismatch
   between rank-one atoms and rank-2+ degenerate eigenspaces.

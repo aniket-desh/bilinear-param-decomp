@@ -501,6 +501,15 @@ will turn this into causal evidence (or kill it) by:
   $|\text{fro\_cos}|$ to the dominant eigenspace, and plot both KL
   curves on the same axes. This is the clean "alignment doesn't pick
   load-bearing atoms" picture.
+- `scripts/run_grid_visuals.py` — for top-K atoms by $\|\Delta M_r\|_F$,
+  plot the deterministic gate $g_c(a, b)$ as a $p \times p$ heatmap
+  and the per-input ablation-error mask (which inputs flip after the
+  atom is surgically removed). Makes the shard claim visually
+  obvious — see the figures referenced below.
+- `scripts/run_sparsity_sweep.py` — train the decomposition once per
+  $\lambda_s$ on the same frozen bilinear MLP and plot atom-MMA,
+  median aligned-vs-random ablation KL, gate density, and the
+  $|\text{corr}| > 0.5$ co-activation fraction vs. $\lambda_s$.
 - 6 new tests in `tests/test_ablations.py`. Test suite: **31/31 pass**.
 
 ### Headline — alignment doesn't predict load-bearing
@@ -553,18 +562,52 @@ strikingly uniform within each run:
 
 | run | top-norm $\Delta$ acc | $\Delta$ acc as fraction | matches |
 |---|---:|---:|---|
-| p13 | −0.0769 | $-10 / 130$ | one row OR column of the $13 \times 13$ table |
-| p23 | −0.0435 | $-23 / 529$ | one row OR column of $23 \times 23$ |
-| p47 | −0.0213 | $-47 / 2209$ | one row OR column of $47 \times 47$ |
+| p13 | −0.0769 | $-13 / 169$ = $-1/13$ | one row OR column of the $13 \times 13$ table |
+| p23 | −0.0435 | $-23 / 529$ = $-1/23$ | one row OR column of $23 \times 23$ |
+| p47 | −0.0213 | $-47 / 2209$ = $-1/47$ | one row OR column of $47 \times 47$ |
 
 Each high-norm atom is causally responsible for exactly *one* row or
 column of the modular-addition lookup table — i.e., for all inputs
 where $a$ (or $b$) takes a specific value. The decomposition has
 learned an "addition-table shard" ontology: roughly $2p$ atoms each
 handle a single value of one argument. That matches the Day 3
-$L_0 \approx 1$ per-sample sparsity finding directly: each input
+$\approx 1$ active-gate-per-sample finding directly: each input
 $(a, b)$ activates ≈ 1 atom because the gates have specialised to
 "fire when $a = k$" or "fire when $b = k$" patterns.
+
+This is visible directly. For the top-12 atoms by $\|\Delta M_r\|_F$
+on p47, the deterministic gate $g_c(a, b)$ over the input grid:
+
+![p47 gate-heatmap, top-12 atoms by norm](runs/modadd_p47_grok_seed0/figures/gate_grid_top_norm_centered_0.png)
+
+and the matching per-input ablation-error masks (red = argmax flipped
+after removing that single atom):
+
+![p47 ablation-error masks, top-12 atoms by norm](runs/modadd_p47_grok_seed0/figures/ablation_mask_top_norm_centered_0.png)
+
+Each panel is a clean horizontal or vertical stripe — the atom fires
+on, and is causally responsible for, exactly one row or column of
+the addition table. In this seed the very top-norm atoms happen to
+be dominated by row shards (constant $a$); column shards exist too
+but appear further down the ranking (rough count over the top-40
+atoms in p47: 32 row, 7 column, 1 other).
+
+### Is the shard ontology forced by the sparsity penalty?
+
+To address the "maybe you forced $L_0 \approx 1$" objection,
+`scripts/run_sparsity_sweep.py` re-trains the p13 decomposition five
+times against the same frozen bilinear MLP at
+$\lambda_s \in \{10^{-2}, 10^{-3}, 10^{-4}, 10^{-5}, 0\}$ and re-runs
+alignment + single-atom ablation each time.
+
+![p13 sparsity sweep](runs/modadd_p13_grok_seed0/figures/sparsity_sweep.png)
+
+The shard ontology is stable across the sweep — atom-MMA stays near
+$\sim 0.25$ (1.6× the random baseline), median aligned-cluster
+ablation KL stays $\sim 10^{-5}$ while random ablation KL stays
+$\sim 10^{-1}$, and even at $\lambda_s = 0$ the gate density rises
+only to a small constant while the alignment-vs-causality gap is
+unchanged. The full sweep is in `artifacts/sparsity_sweep.json`.
 
 ### Verdict on H1 / H2 / H3
 

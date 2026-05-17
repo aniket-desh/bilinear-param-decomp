@@ -240,64 +240,51 @@ def main() -> None:
     with open(out / "artifacts" / "sparsity_sweep.json", "w") as f:
         json.dump({"probe": args.probe, "rows": sweep}, f, indent=2)
 
-    # Plot
+    # Plot — two panels carrying the actual claim: "sparsity doesn't change the story".
     apply_style()
-    fig, axes = plt.subplots(1, 3, figsize=(13.5, 4.0))
+    fig, axes = plt.subplots(1, 2, figsize=(10.0, 3.6))
     xs = list(range(len(sweep)))
     xticklabels = [(f"{r['lambda_sparsity']:g}" if r['lambda_sparsity'] > 0 else "0")
                    for r in sweep]
 
-    # Panel 1: MMA (atoms) and random baseline.
-    axes[0].plot(xs, [r["atom_mma_eig_coverage"] for r in sweep],
-                 color=COLORS["blue"], marker="o", label="atom MMA")
-    axes[0].plot(xs, [r["random_mma"] for r in sweep],
-                 color=COLORS["gray"], marker="x", label="random baseline")
-    axes[0].set_ylabel("mean max alignment (eigenspace coverage)")
+    # Panel 1: MMA (atoms) vs random.
+    atom_mma_series = [r["atom_mma_eig_coverage"] for r in sweep]
+    rand_mma_series = [r["random_mma"] for r in sweep]
+    axes[0].plot(xs, atom_mma_series, color=COLORS["atom"], lw=2.4, marker="o")
+    axes[0].plot(xs, rand_mma_series, color=COLORS["random"], lw=2.0, marker="x",
+                 linestyle="--")
+    axes[0].set_ylabel("mean max alignment")
     axes[0].set_xticks(xs); axes[0].set_xticklabels(xticklabels)
     axes[0].set_xlabel(r"$\lambda_\mathrm{sparsity}$")
-    axes[0].set_ylim(0.0, 1.0)
-    axes[0].legend(loc="upper right", frameon=False, fontsize=9)
-    axes[0].set_title("alignment vs sparsity")
+    axes[0].set_ylim(0.0, 0.35)
+    axes[0].set_xlim(-0.4, len(xs) - 0.6 + 1.4)
+    axes[0].annotate("atoms", xy=(xs[-1], atom_mma_series[-1]),
+                     xytext=(xs[-1] + 0.25, atom_mma_series[-1]),
+                     color=COLORS["atom"], fontsize=9.5, va="center")
+    axes[0].annotate("random", xy=(xs[-1], rand_mma_series[-1]),
+                     xytext=(xs[-1] + 0.25, rand_mma_series[-1]),
+                     color=COLORS["muted"], fontsize=9.5, va="center")
+    axes[0].set_title("alignment is flat in sparsity")
 
     # Panel 2: median ablation KL aligned vs random.
-    axes[1].plot(xs, [r["median_aligned_KL"] for r in sweep],
-                 color=COLORS["orange"], marker="o", label="aligned-atom (median)")
-    axes[1].plot(xs, [r["median_random_KL_of_means"] for r in sweep],
-                 color=COLORS["gray"], marker="x", label="random-atom (median of trial-means)")
+    aligned_series = [r["median_aligned_KL"] for r in sweep]
+    random_series = [r["median_random_KL_of_means"] for r in sweep]
+    axes[1].plot(xs, aligned_series, color=COLORS["atom"], lw=2.4, marker="o")
+    axes[1].plot(xs, random_series, color=COLORS["loadbearing"], lw=2.0, marker="x",
+                 linestyle="--")
     axes[1].set_yscale("log")
-    axes[1].set_ylabel("single-atom ablation KL")
+    axes[1].set_ylabel("KL after single-atom ablation")
     axes[1].set_xticks(xs); axes[1].set_xticklabels(xticklabels)
     axes[1].set_xlabel(r"$\lambda_\mathrm{sparsity}$")
-    axes[1].legend(loc="lower left", frameon=False, fontsize=9)
-    axes[1].set_title("aligned vs random ablation")
+    axes[1].set_xlim(-0.4, len(xs) - 0.6 + 1.6)
+    axes[1].annotate("aligned atom", xy=(xs[-1], aligned_series[-1]),
+                     xytext=(xs[-1] + 0.25, aligned_series[-1]),
+                     color=COLORS["atom"], fontsize=9.5, va="center")
+    axes[1].annotate("random atom", xy=(xs[-1], random_series[-1]),
+                     xytext=(xs[-1] + 0.25, random_series[-1]),
+                     color=COLORS["loadbearing"], fontsize=9.5, va="center")
+    axes[1].set_title("aligned/causal gap is flat in sparsity")
 
-    # Panel 3: gate L0 + co-activation fraction.
-    ax = axes[2]
-    line1 = ax.plot(xs, [r["mean_gates_above_threshold"] for r in sweep],
-                    color=COLORS["green"], marker="o", label="mean #gates > 1e-3")
-    ax.set_ylabel("mean #active gates / sample", color=COLORS["green"])
-    ax.set_xticks(xs); ax.set_xticklabels(xticklabels)
-    ax.set_xlabel(r"$\lambda_\mathrm{sparsity}$")
-    ax.tick_params(axis="y", colors=COLORS["green"])
-    ax.set_title("gate density and co-activation")
-
-    ax2 = ax.twinx()
-    line2 = ax2.plot(xs, [r["co_activation_frac_at_0.5"] for r in sweep],
-                     color=COLORS["red"], marker="x", label="P(|corr| > 0.5)")
-    ax2.set_ylabel("fraction off-diag |corr| > 0.5", color=COLORS["red"])
-    ax2.tick_params(axis="y", colors=COLORS["red"])
-    ax2.spines["top"].set_visible(False)
-    ax2.grid(False)
-
-    lines = line1 + line2
-    labels = [l.get_label() for l in lines]
-    ax.legend(lines, labels, loc="upper right", frameon=False, fontsize=9)
-
-    fig.suptitle(
-        f"{cfg['run_name']}  probe={args.probe}  "
-        f"sparsity-pressure sweep ($\\lambda_b = \\lambda_A = \\lambda_B = 1$, others held fixed)",
-        y=1.02,
-    )
     fig.tight_layout()
     fig.savefig(out / "figures" / "sparsity_sweep.png")
     plt.close(fig)

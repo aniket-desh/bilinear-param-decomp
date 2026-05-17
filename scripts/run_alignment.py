@@ -41,7 +41,13 @@ from bilinear_spd.decomposition import BilinearComponentMLP
 from bilinear_spd.functional import build_probes
 from bilinear_spd.metrics import fro_cos, mean_max_alignment, projector_energy
 from bilinear_spd.models import BilinearMLP
-from bilinear_spd.plotting import plot_alignment_bars, plot_alignment_heatmaps
+from bilinear_spd.ablations import ablate_weights, evaluate_ablation
+from bilinear_spd.plotting import (
+    plot_alignment_bars,
+    plot_alignment_coverage,
+    plot_alignment_heatmaps,
+    plot_alignment_vs_ablation,
+)
 from bilinear_spd.utils import (
     load_checkpoint,
     load_config,
@@ -93,38 +99,40 @@ def _random_baseline_alignment(
     n_trials: int = 64,
     device: torch.device | str = "cpu",
     seed: int = 0,
-) -> dict[str, float]:
+) -> dict[str, float | list[float]]:
     """Mean-max-alignment for a random "decomposition" with the same shape.
 
-    For each trial we sample `n_rows` random symmetric d×d matrices,
-    compute the full alignment matrix, and record both
-    `mean_max_alignment(axis="eigenspaces")` (eigenspace coverage) and
-    `mean_max_alignment(axis="atoms")` (per-atom best). Returns mean ± std
-    over trials so we have a sense of chance behaviour.
-
-    Why random *symmetric*: $\\Delta M_r$ is always symmetric, so the right
-    null is the symmetric-matrix sphere, not the full d² Gaussian.
+    Returns both the scalar MMA summaries (eig_coverage_mean ± std,
+    atom_axis_mean ± std) and the *per-eigenspace* "best random atom"
+    distribution (mean + std over trials), so we can render the coverage
+    plot's gray ±2σ band.
     """
     if not projectors:
         return {"eig_coverage_mean": 0.0, "eig_coverage_std": 0.0,
-                "atom_axis_mean": 0.0, "atom_axis_std": 0.0}
+                "atom_axis_mean": 0.0, "atom_axis_std": 0.0,
+                "per_eigenspace_mean": [], "per_eigenspace_std": []}
     d = projectors[0].shape[0]
     gen = torch.Generator(device="cpu").manual_seed(seed)
     eig_vals = []
     atom_vals = []
+    per_eig_best_trials = []   # [n_trials, n_eig]
     for _ in range(n_trials):
         deltas_raw = torch.randn(n_rows, d, d, generator=gen).to(device)
         deltas_sym = 0.5 * (deltas_raw + deltas_raw.transpose(-1, -2))
         align = _alignment_matrix(deltas_sym, projectors)
         eig_vals.append(float(mean_max_alignment(align, axis="eigenspaces").item()))
         atom_vals.append(float(mean_max_alignment(align, axis="atoms").item()))
+        per_eig_best_trials.append(align.max(dim=0).values.cpu())
     eig_t = torch.tensor(eig_vals)
     atom_t = torch.tensor(atom_vals)
+    per_eig_t = torch.stack(per_eig_best_trials)   # [n_trials, n_eig]
     return {
         "eig_coverage_mean": float(eig_t.mean()),
         "eig_coverage_std": float(eig_t.std(unbiased=False)),
         "atom_axis_mean": float(atom_t.mean()),
         "atom_axis_std": float(atom_t.std(unbiased=False)),
+        "per_eigenspace_mean": per_eig_t.mean(dim=0).tolist(),
+        "per_eigenspace_std": per_eig_t.std(dim=0, unbiased=False).tolist(),
     }
 
 
@@ -280,15 +288,54 @@ def main() -> None:
             f"mean max alignment (clusters→eigenspaces): {cluster_axis:.3f}     "
             f"eigenspace coverage by best cluster: {cluster_mma:.3f}"
         )
+        # Diagnostic heatmap (capped vmax, top-region only). Coverage + scatter
+        # below are the main-text visuals.
         plot_alignment_heatmaps(
             atom_align, cluster_align,
             out_path=figures / f"alignment_{probe_name}.png",
             title=f"{cfg['run_name']}  probe={probe_name}  "
-                  f"({atoms_alive_deltas.shape[0]} live atoms, "
+                  f"(diagnostic, {atoms_alive_deltas.shape[0]} live atoms, "
                   f"{clusters_alive_deltas.shape[0]} live clusters, "
                   f"{len(projectors)} eigenspaces)",
             summary_text=summary_text,
         )
+
+        # --- Main-text visual 1: sorted best-match coverage curve ---
+        atom_best = atom_align.max(dim=0).values
+        cluster_best = cluster_align.max(dim=0).values
+        plot_alignment_coverage(
+            atom_best, cluster_best,
+            random_per_eigenspace={
+                "mean": baseline["per_eigenspace_mean"],
+                "std": baseline["per_eigenspace_std"],
+            },
+            out_path=figures / f"alignment_coverage_{probe_name}.png",
+            title=None,
+        )
+
+        # --- Main-text visual 2: alignment-vs-ablation scatter ---
+        # Compute single-atom ablation KL for *every alive atom* on this probe.
+        # Cost: ~O(C_A + C_B) plain bilinear forwards on the full table.
+        with torch.no_grad():
+            y_target = decomp.forward_target(data["x"])
+        per_atom_kl = torch.zeros(int(atoms_alive_deltas.shape[0]),
+                                  device=device, dtype=atom_deltas.norms.dtype)
+        per_atom_max_align = atom_align.max(dim=1).values
+        atom_norms_alive = atom_deltas.norms[atom_alive]
+        for k, global_atom in enumerate(atom_idx):
+            A_m, B_m = ablate_weights(decomp, [int(global_atom)])
+            metrics = evaluate_ablation(
+                decomp, data["x"], y_target, A_m, B_m, r=r,
+                targets_for_acc=data.get("y"),
+            )
+            per_atom_kl[k] = metrics["kl"]
+        plot_alignment_vs_ablation(
+            per_atom_max_align, per_atom_kl, atom_norms_alive,
+            out_path=figures / f"alignment_vs_ablation_{probe_name}.png",
+            title=None,
+        )
+        raw_alignments[probe_name]["per_atom_kl"] = per_atom_kl.cpu()
+        raw_alignments[probe_name]["per_atom_max_alignment"] = per_atom_max_align.cpu()
 
         per_probe_records[probe_name] = {
             "n_eigenspaces": len(projectors),
@@ -309,7 +356,8 @@ def main() -> None:
             f"(atom-axis: a={atom_axis:.3f}/c={cluster_axis:.3f}/rand={baseline['atom_axis_mean']:.3f})"
         )
 
-    # cross-probe bars (use eigenspace-coverage MMA — the "do mechanisms get covered?" number)
+    # cross-probe bars (eigenspace-coverage MMA — the "do mechanisms get covered?" number).
+    # No title — caption in the post carries the claim.
     baseline_by_probe = {
         name: per_probe_records[name]["random_baseline"] for name in atom_mma_per_probe
     }
@@ -317,7 +365,7 @@ def main() -> None:
         atom_mma_per_probe,
         cluster_mma_per_probe,
         out_path=figures / "alignment_mma_by_probe.png",
-        title=f"{cfg['run_name']}  mean-max-alignment per probe (eigenspace coverage)",
+        title=None,
         baseline_by_probe=baseline_by_probe,
     )
 

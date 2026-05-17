@@ -178,13 +178,22 @@ For p47 the spectrum looks like this:
 
 ![p47 spectrum, centered class probe](runs/modadd_p47_grok_seed0/figures/spectrum_centered_0.png)
 
-64 eigenspaces with $|\lambda| \sim 10^1$, then a two-decade cliff,
-then a noise floor; 8–14 degenerate groups (at relative tolerance
-$\tau = 0.01$), with the largest group having rank up to 20. The top
-eigenvectors show clear periodic structure along the a-slot (rows 0–46)
-and b-slot (rows 47–93):
+*Spectrum of $M_r$ for the centered class probe $r = e_0 - \tfrac{1}{p}\mathbf{1}$
+on the grokked p47 model. Bar colour encodes group type: light gray =
+singleton eigenspace, blue = degenerate (rank ≥ 2) eigenspace, dark
+blue = the largest degenerate group (here rank 12). The dashed line
+marks the spectral cliff between leading functional modes and the
+noise floor.*
+
+The top eigenvectors show periodic structure across both input slots:
 
 ![p47 top eigenvectors](runs/modadd_p47_grok_seed0/figures/eigenvectors_centered_0.png)
+
+*Top-8 eigenvectors of $M_r$ as columns. Each column is a
+$2p = 94$-dim vector split into the $a$-slot (rows 0–46) and the
+$b$-slot (rows 47–93) at the dashed line. Visible (slightly
+muddied) periodicity across both slots indicates the bilinear MLP
+implements a Fourier-flavoured modular-addition algorithm.*
 
 So the functional object exists, is non-trivial, and looks
 algorithmically meaningful.
@@ -268,16 +277,26 @@ For p47:
 
 ![p47 alignment bars by probe](runs/modadd_p47_grok_seed0/figures/alignment_mma_by_probe.png)
 
-The blue (atoms) and orange (clusters) bars are visibly equal-height
-across all six probes, both ~2× the gray random-baseline bar with
-its standard-deviation whiskers. The atom-versus-eigenspace heatmap
-for the same probe:
+*Atoms (blue) and clusters (amber) are visibly equal-height across
+all six probes, both ~2× the gray random-baseline bar; absolute
+alignment caps at $\approx 0.11$. Y-axis is capped at 0.30 — the
+story is the separation from random, not closeness to 1.*
 
-![p47 alignment heatmap, centered class probe](runs/modadd_p47_grok_seed0/figures/alignment_centered_0.png)
+Zooming in to one probe (`centered_0`), the per-eigenspace coverage
+profile makes the H1/H2/H3 question very direct:
 
-Atoms sorted by max alignment desc. There is no near-diagonal H1
-structure and no "clusters fill in the gaps" H2 structure; the entire
-heatmap caps around 0.2 on the colourmap.
+![p47 alignment coverage profile, centered class probe](runs/modadd_p47_grok_seed0/figures/alignment_coverage_centered_0.png)
+
+*For each eigenspace (sorted by best atom alignment desc), the blue
+curve is the maximum atom alignment; the amber halo behind it is the
+maximum cluster alignment; the gray ±2σ band is what a random
+size-matched set of symmetric matrices would produce. If H1 held the
+blue curve would start near 1. If H2 held, the amber halo would sit
+above the blue curve. In fact the blue and amber curves are
+indistinguishable — clustering provides no lift — and the blue curve
+stays in $[0.05, 0.22]$, well above random but well below recovery.
+About 50 / 65 eigenspaces have a non-trivial atom overlap; the bottom
+15 cross into the random band.*
 
 Why doesn't clustering help? Because in this regime the atoms are
 *nearly orthogonal* in their co-activation pattern. At correlation
@@ -294,8 +313,25 @@ recovery. Causal ablation lets us tell which.
 
 ## Causal ablation — the most-aligned atoms are not load-bearing
 
-Per spec § 5.9, the right test is to *surgically remove* an atom from
-the weights and measure behaviour change. For atom set $S$, build
+The single most informative figure in this project is the
+per-atom plot of alignment vs causal load-bearing:
+
+![p47 alignment vs single-atom ablation KL, centered class probe](runs/modadd_p47_grok_seed0/figures/alignment_vs_ablation_centered_0.png)
+
+*Each dot is one atom. X-axis: its best Frobenius cosine to any
+$M_r$-eigenspace projector. Y-axis: the KL between the unperturbed
+target and the model with this atom surgically removed (log scale).
+Color encodes $\log_{10} \|\Delta M_r\|_F$ — the atom's "size" in
+function space. The top band (KL $\sim 1$) is the load-bearing
+atoms; the bottom band (KL $\sim 10^{-7}$) is the dispensable atoms.
+The load-bearing band is colored bright (high norm); the dispensable
+band is colored dark (low norm). Alignment (x-axis) does not
+separate the two bands — the rightmost dot (highest-aligned atom) is
+in the dispensable band.*
+
+Per spec § 5.9, the right test for the headline atoms is to
+*surgically remove* an atom from the weights and measure behaviour
+change directly. For atom set $S$, build
 $A_{-S} = A - \sum_{c \in S \cap A} u^A_c (v^A_c)^\top$ and
 $B_{-S} = B - \sum_{c \in S \cap B} u^B_c (v^B_c)^\top$, then evaluate
 the *plain bilinear* forward $((x A_{-S}) \odot (x B_{-S})) C$ — no
@@ -339,17 +375,16 @@ perturbation size) instead of by alignment, and walk down the top-K.
 
 ![p47 rank-ablation diagnostic, centered class probe](runs/modadd_p47_grok_seed0/figures/rank_ablation_centered_0.png)
 
-Orange: top-30 atoms by $\|\Delta M_r\|_F$ — every single one collapses
-behaviour ($\mathrm{KL} \sim 1.2$, $\Delta\text{acc} \approx -2\%$).
-Blue: top-30 atoms by alignment — KL stays at the floating-point floor,
-$\Delta\text{acc}$ is exactly 0. The top-10-by-norm and top-10-by-alignment
-sets overlap in only **0 – 1 atoms** across the three configs:
-
-| run | overlap (top-10-by-norm ∩ top-10-by-alignment) |
-|---|---:|
-| p13 | 1 / 10 |
-| p23 | 0 / 10 |
-| p47 | 1 / 10 |
+*The orange line (rank by $\|\Delta M_r\|_F$) sits flat at the top
+of the y-axis: every one of the top-30 norm-ranked atoms collapses
+behaviour ($\mathrm{KL} \sim 1$, $\Delta\text{acc} \approx -2\%$).
+The blue line (rank by eigenspace alignment) is a step function
+between the high-impact band and the floating-point floor — about
+8 / 30 of the top-aligned atoms happen to also be load-bearing,
+the other 19 / 30 do nothing when removed. So alignment is a noisy,
+~3× over-random selector for load-bearing atoms, while norm is a
+near-perfect one. The two top-10 sets overlap in only 0 – 1 atoms
+across the three p values (p13: 1/10, p23: 0/10, p47: 1/10).*
 
 So the "best aligned" and the "load-bearing" populations are nearly
 disjoint.
@@ -376,21 +411,22 @@ the input grid:
 
 ![p47 gate-heatmap, top-12 atoms by norm](runs/modadd_p47_grok_seed0/figures/gate_grid_top_norm_centered_0.png)
 
-Each panel is a clean horizontal stripe (a row of constant $a$) or
-vertical stripe (a column of constant $b$) — the atom fires whenever
-one of the two input arguments takes a particular value. The
-matching per-input ablation-error mask is just as clean:
+*Each panel is one atom's $g_c$ as a function of $(a, b)$ on the
+$47 \times 47$ input table. The shard hypothesis predicts a clean
+horizontal or vertical stripe — that is exactly what every top-norm
+atom looks like.*
+
+And the matching per-input ablation-error mask:
 
 ![p47 ablation-error masks, top-12 atoms by norm](runs/modadd_p47_grok_seed0/figures/ablation_mask_top_norm_centered_0.png)
 
-Red cells are inputs where the model's prediction flips after the
-atom is surgically removed. Each high-norm atom kills exactly the
-inputs where its gated stripe lives — and only those inputs.
-
-(In this particular seed the very top-norm atoms happen to be
-dominated by row-shards; column-shards exist too but appear lower
-in the ranking. Across the top-40 p47 atoms the rough split is 32
-row, 7 column, 1 mixed.)
+*Same atoms; red cells are inputs where the model's argmax flips
+after that single atom is surgically removed. Each high-norm atom
+kills exactly 47/2 209 = 1/47 of the table — the one row (or
+column) where its gate fires. (In this seed the very top-norm
+atoms are all a-row shards; b-column shards exist too but appear
+deeper in the ranking — across the top-40 the rough split is 32
+row, 7 column, 1 mixed.)*
 
 ## Is the shard ontology forced by the sparsity penalty?
 
@@ -401,23 +437,16 @@ times against the same frozen bilinear MLP at
 $\lambda_s \in \{10^{-2}, 10^{-3}, 10^{-4}, 10^{-5}, 0\}$ and re-ran
 alignment + ablation each time.
 
-![p13 sparsity sweep — MMA and ablation KL vs lambda_s](runs/modadd_p13_grok_seed0/figures/sparsity_sweep.png)
+![p13 sparsity sweep](runs/modadd_p13_grok_seed0/figures/sparsity_sweep.png)
 
-The shard ontology is stable across the sweep:
-
-- Atom mean-max-alignment stays at $0.25 - 0.27$ across all five
-  $\lambda_s$ values — about $1.7\times$ the random baseline of
-  $\sim 0.15$, never close to 1.
-- Median aligned-cluster ablation KL stays at $\sim 10^{-5}$ across
-  all settings; the random-atom median (averaged across each
-  eigenspace's 50 random trials, then median across eigenspaces)
-  stays at $\sim 0.2$. The alignment-vs-causality gap is robust to
-  the sparsity knob to within an order of magnitude.
-- Mean deterministic gates per input rises modestly from $\sim 2.1$
-  (highest sparsity) to $\sim 2.8$ (no penalty), and the
-  $|\text{corr}| > 0.5$ co-activation fraction grows correspondingly
-  — but the *load-bearing* atoms remain a small set of high-norm
-  "row/column" atoms in every setting, and atom-MMA is unchanged.
+*Left: atom mean-max-alignment (blue) stays flat at $\approx 0.26$
+across all five settings while the random baseline (gray, dashed)
+stays at $\approx 0.15$ — a flat $\sim 1.7\times$ ratio, no
+convergence toward 1. Right: median single-atom ablation KL for
+the best-aligned atom (blue) stays at $\sim 10^{-5}$; the random
+size-matched control (orange) stays at $\sim 10^{-1}$ — flat
+5-orders-of-magnitude gap between geometric and causal selection,
+regardless of $\lambda_s$.*
 
 So removing the sparsity pressure entirely doesn't recover the
 eigenspace ontology — the shard solution is what this decomposition

@@ -17,7 +17,7 @@ dist/
 .DS_Store
 
 # run artifacts — checkpoints, datasets, CSVs are gitignored, but track figures + reports
-# so summary.md renders on GitHub and reproducibility metadata stays in-tree.
+# so post.md renders on GitHub and reproducibility metadata stays in-tree.
 runs/*/checkpoints/
 runs/*/artifacts/
 !runs/.gitkeep

@@ -102,35 +102,59 @@ def main() -> None:
         return vec.reshape(p, p).numpy()
 
     apply_style()
+    from bilinear_spd.plotting import COLORS
+    from matplotlib.colors import LinearSegmentedColormap, ListedColormap
+
+    # Sequential cream → deep blue for gates; binary white→shard-red for flips.
+    gate_cmap = LinearSegmentedColormap.from_list(
+        "gate_cream_blue",
+        ["#FCFAF6", "#A5C3DD", COLORS["atom"], COLORS["accent_dark"]],
+    )
+    flip_cmap = ListedColormap(["#FFFFFF", COLORS["shard"]])
+
+    # Decide grid layout — prefer 4 cols × ceil rows.
+    cols = 4 if args.top_k >= 8 else 3
+    rows = int(np.ceil(args.top_k / cols))
 
     # --- gate heatmaps ---
-    cols = min(3, args.top_k)
-    rows = int(np.ceil(args.top_k / cols))
-    fig, axes = plt.subplots(rows, cols, figsize=(3.2 * cols, 3.0 * rows), squeeze=False)
+    fig, axes = plt.subplots(rows, cols,
+                             figsize=(2.55 * cols + 0.7, 2.55 * rows),
+                             squeeze=False, sharex=True, sharey=True)
+    im = None
     for k, atom_idx in enumerate(top_atoms):
         ax = axes[k // cols][k % cols]
-        gate_vec = g_all[:, atom_idx]
-        grid = to_grid(gate_vec)
-        im = ax.imshow(grid, cmap="viridis", vmin=0.0, vmax=1.0, aspect="auto",
-                       origin="lower")
+        grid = to_grid(g_all[:, atom_idx])
+        im = ax.imshow(grid, cmap=gate_cmap, vmin=0.0, vmax=1.0,
+                       aspect="equal", origin="lower",
+                       interpolation="nearest")
         side = "A" if atom_idx < C_A else "B"
-        ax.set_title(f"atom {atom_idx} ({side})  ‖ΔM_r‖={norms[atom_idx].item():.1f}", fontsize=10)
-        ax.set_xlabel("b"); ax.set_ylabel("a")
+        ax.set_title(f"atom {atom_idx} · {side}-side · rank {k + 1}", fontsize=9.5)
+        ax.set_xticks([0, p - 1]); ax.set_yticks([0, p - 1])
+        ax.set_xticklabels([0, p - 1] if k // cols == rows - 1 else [])
+        ax.set_yticklabels([0, p - 1] if k % cols == 0 else [])
+        if k // cols == rows - 1:
+            ax.set_xlabel("$b$", fontsize=10)
+        if k % cols == 0:
+            ax.set_ylabel("$a$", fontsize=10)
         ax.grid(False)
-        fig.colorbar(im, ax=ax, fraction=0.046, pad=0.02)
+        for s in ("top", "right", "bottom", "left"):
+            ax.spines[s].set_color(COLORS["grid"])
     for k in range(args.top_k, rows * cols):
         axes[k // cols][k % cols].axis("off")
-    fig.suptitle(
-        f"{cfg['run_name']}  probe={args.probe}  "
-        f"deterministic gate g_c(a, b) for top-{args.top_k} atoms by ‖ΔM_r‖_F",
-        y=1.0,
-    )
-    fig.tight_layout()
-    fig.savefig(out / "figures" / f"gate_grid_top_norm_{args.probe}.png")
+
+    fig.subplots_adjust(right=0.91)
+    cbar_ax = fig.add_axes([0.93, 0.18, 0.018, 0.64])
+    cb = fig.colorbar(im, cax=cbar_ax)
+    cb.set_label("deterministic gate $g_c(a, b)$", fontsize=9.5)
+    cb.outline.set_visible(False)
+    fig.savefig(out / "figures" / f"gate_grid_top_norm_{args.probe}.png",
+                bbox_inches="tight")
     plt.close(fig)
 
-    # --- ablation-error masks ---
-    fig, axes = plt.subplots(rows, cols, figsize=(3.2 * cols, 3.0 * rows), squeeze=False)
+    # --- ablation-error masks (binary white / red) ---
+    fig, axes = plt.subplots(rows, cols,
+                             figsize=(2.55 * cols + 0.4, 2.55 * rows),
+                             squeeze=False, sharex=True, sharey=True)
     for k, atom_idx in enumerate(top_atoms):
         ax = axes[k // cols][k % cols]
         A_m, B_m = ablate_weights(decomp, [int(atom_idx)])
@@ -139,20 +163,25 @@ def main() -> None:
         flips = (abl_argmax != target_argmax).float()
         n_flipped = int(flips.sum().item())
         grid = to_grid(flips)
-        ax.imshow(grid, cmap="Reds", vmin=0.0, vmax=1.0, aspect="auto", origin="lower")
+        ax.imshow(grid, cmap=flip_cmap, vmin=0.0, vmax=1.0,
+                  aspect="equal", origin="lower", interpolation="nearest")
         side = "A" if atom_idx < C_A else "B"
-        ax.set_title(f"atom {atom_idx} ({side})  flips={n_flipped}/{p * p}", fontsize=10)
-        ax.set_xlabel("b"); ax.set_ylabel("a")
+        ax.set_title(f"atom {atom_idx} · {side} · {n_flipped}/{p * p} flipped", fontsize=9.5)
+        ax.set_xticks([0, p - 1]); ax.set_yticks([0, p - 1])
+        ax.set_xticklabels([0, p - 1] if k // cols == rows - 1 else [])
+        ax.set_yticklabels([0, p - 1] if k % cols == 0 else [])
+        if k // cols == rows - 1:
+            ax.set_xlabel("$b$", fontsize=10)
+        if k % cols == 0:
+            ax.set_ylabel("$a$", fontsize=10)
         ax.grid(False)
+        for s in ("top", "right", "bottom", "left"):
+            ax.spines[s].set_color(COLORS["grid"])
     for k in range(args.top_k, rows * cols):
         axes[k // cols][k % cols].axis("off")
-    fig.suptitle(
-        f"{cfg['run_name']}  probe={args.probe}  "
-        f"per-input ablation flip mask for top-{args.top_k} atoms by ‖ΔM_r‖_F",
-        y=1.0,
-    )
-    fig.tight_layout()
-    fig.savefig(out / "figures" / f"ablation_mask_top_norm_{args.probe}.png")
+
+    fig.savefig(out / "figures" / f"ablation_mask_top_norm_{args.probe}.png",
+                bbox_inches="tight")
     plt.close(fig)
 
     print(

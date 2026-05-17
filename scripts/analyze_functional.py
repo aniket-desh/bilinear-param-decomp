@@ -110,7 +110,7 @@ def main() -> None:
             evals,
             groups,
             out_path=out / "figures" / f"spectrum_{name}.png",
-            title=f"{cfg['run_name']}  probe={name}",
+            title=None,
             min_abs_eval=min_abs_eval,
         )
         plot_top_eigenvectors(
@@ -119,7 +119,7 @@ def main() -> None:
             out_path=out / "figures" / f"eigenvectors_{name}.png",
             k=min(8, evecs.shape[1]),
             slot_split=slot_split,
-            title=f"{cfg['run_name']}  probe={name}",
+            title=None,
         )
 
         # human-readable line

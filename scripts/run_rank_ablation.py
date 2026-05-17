@@ -116,26 +116,38 @@ def main() -> None:
     by_align = _walk(rank_align)
 
     apply_style()
-    fig, axes = plt.subplots(2, 1, figsize=(7.5, 6.5), sharex=True)
+    fig, axes = plt.subplots(2, 1, figsize=(7.6, 5.6), sharex=True)
     x = np.arange(args.top_n)
-    axes[0].plot(x, [r["kl"] for r in by_norm], color=COLORS["orange"],
-                 marker="o", label="rank by ‖ΔM_r‖_F")
-    axes[0].plot(x, [r["kl"] for r in by_align], color=COLORS["blue"],
-                 marker="x", label="rank by |fro_cos| to top eigenspace")
+    kl_norm = np.array([r["kl"] for r in by_norm], dtype=float).clip(min=1e-9)
+    kl_align = np.array([r["kl"] for r in by_align], dtype=float).clip(min=1e-9)
+    axes[0].plot(x, kl_norm, color=COLORS["loadbearing"], lw=2.4)
+    axes[0].plot(x, kl_align, color=COLORS["atom"], lw=2.4)
     axes[0].set_yscale("log")
-    axes[0].set_ylabel("single-atom ablation KL")
-    axes[0].set_title(f"{cfg['run_name']}  probe={args.probe}  one-at-a-time ablation")
-    axes[0].legend(loc="upper right", frameon=False, fontsize=9)
-    axes[0].grid(True, alpha=0.25)
+    axes[0].set_ylabel("KL after single-atom ablation")
+    axes[0].set_title("Load-bearing atoms are selected by norm, not by eigenspace alignment")
+    axes[0].set_xlim(-0.5, args.top_n + 5)
+    # direct labels at right edge of each line
+    axes[0].annotate(r"rank by $\|\Delta M_r\|_F$", xy=(x[-1], kl_norm[-1]),
+                     xytext=(x[-1] + 0.6, kl_norm[-1]), color=COLORS["loadbearing"],
+                     fontsize=9.5, va="center", annotation_clip=False)
+    axes[0].annotate("rank by eigenspace alignment", xy=(x[-1], kl_align[-1]),
+                     xytext=(x[-1] + 0.6, kl_align[-1]), color=COLORS["atom"],
+                     fontsize=9.5, va="center", annotation_clip=False)
 
-    axes[1].plot(x, [r["d_acc"] for r in by_norm], color=COLORS["orange"],
-                 marker="o", label="rank by ‖ΔM_r‖_F")
-    axes[1].plot(x, [r["d_acc"] for r in by_align], color=COLORS["blue"],
-                 marker="x", label="rank by alignment")
-    axes[1].set_ylabel(r"$\Delta$ accuracy")
-    axes[1].set_xlabel("rank (top-K)")
-    axes[1].axhline(0, color=COLORS["gray"], linewidth=0.6, linestyle="--")
-    axes[1].grid(True, alpha=0.25)
+    dacc_norm = np.array([r["d_acc"] for r in by_norm], dtype=float)
+    dacc_align = np.array([r["d_acc"] for r in by_align], dtype=float)
+    axes[1].axhline(0.0, color=COLORS["muted"], linewidth=0.7, linestyle="--")
+    axes[1].plot(x, dacc_norm, color=COLORS["loadbearing"], lw=2.4)
+    axes[1].plot(x, dacc_align, color=COLORS["atom"], lw=2.4)
+    axes[1].set_ylabel("Change in accuracy")
+    axes[1].set_xlabel("Atom rank")
+    axes[1].set_xlim(-0.5, args.top_n + 5)
+    axes[1].annotate(r"rank by $\|\Delta M_r\|_F$", xy=(x[-1], dacc_norm[-1]),
+                     xytext=(x[-1] + 0.6, dacc_norm[-1]), color=COLORS["loadbearing"],
+                     fontsize=9.5, va="center", annotation_clip=False)
+    axes[1].annotate("rank by eigenspace alignment", xy=(x[-1], dacc_align[-1]),
+                     xytext=(x[-1] + 0.6, dacc_align[-1] + 0.005), color=COLORS["atom"],
+                     fontsize=9.5, va="center", annotation_clip=False)
     fig.tight_layout()
     fig.savefig(out / "figures" / f"rank_ablation_{args.probe}.png")
     plt.close(fig)

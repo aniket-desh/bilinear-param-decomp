@@ -2,7 +2,7 @@ project: bilinear_spd_benchmark
 run_name: modadd_p13_grok_seed0
 
 seed: 0
-device: cpu
+device: auto
 
 task:
   name: modular_addition

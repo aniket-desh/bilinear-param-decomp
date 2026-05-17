@@ -1,0 +1,12 @@
+{
+  "final_step": 19999,
+  "final_loss": 0.00742210540920496,
+  "final_kl": 0.0005601561861112714,
+  "final_param_recon_A": 1.4079697393754032e-05,
+  "final_param_recon_B": 1.1863349755003583e-05,
+  "final_l0_A": 1.2366863489151,
+  "final_l0_B": 1.1893491744995117,
+  "C_A": 64,
+  "C_B": 64,
+  "trainable_params": 19200
+}

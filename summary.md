@@ -270,14 +270,89 @@ meaningful target. The grokked checkpoints have:
 - Fourier-flavored eigenvectors, so visual sanity checks during alignment
   are interpretable.
 
-## Up next — Day 3
+## Day 3 — gated rank-one decomposition trained on all three grokked targets
 
-- `BilinearComponentMLP`: gated rank-one decomposition of $A$ and $B$.
-  Parameters $U_A, V_A, U_B, V_B$ + small MLP gates. Cherry-pick
-  `lower_leaky`/`upper_leaky` sigmoids from the Goodfire `nano_param_decomp`
-  file with attribution.
-- `train_decomp`: 4-term loss (KL behavior, parameter recon $\|A - \hat A\|^2_F$,
-  L1 gate sparsity, frequency penalty). Use stochastic-mask sampling
-  (`mask = g + (1-g)·U(0,1)`) from the first iteration.
-- Train decompositions for all three grokked checkpoints. Track parameter
-  reconstruction error and behavior agreement.
+### What landed (code)
+
+- `src/bilinear_spd/sigmoids.py`, `losses.py`, `decomposition.py` —
+  `BilinearComponentMLP` wraps a frozen `BilinearMLP` with rank-one atoms
+  $u^A_c (v^A_c)^\top$ for $A$ and likewise for $B$, plus a small
+  per-atom gate MLP. The atom-only reconstruction is $\hat A = \sum_c u^A_c (v^A_c)^\top$
+  with implicit residual $\Delta = A - \hat A$ kept *unmasked* — masking
+  affects only the atoms, so the parameter-reconstruction loss
+  $\|\Delta\|^2 / \|A\|^2$ stays interpretable.
+- Cherry-picked from Goodfire `nano_param_decomp/run.py` (with attribution
+  in the source): `lower_leaky` / `upper_leaky` (§ B), `kl_logits` and
+  `frequency_penalty` (§ E), and the stochastic-mask sampler
+  $m = g + (1 - g) \cdot U(0,1)$ (§ E).
+- `train_decomposition` (4-term loss: KL behavior + relative param recon
+  for $A$ and $B$ + $L_1$ gate sparsity + frequency penalty), `train_decomp`
+  CLI, `plot_decomposition_curves` (loss / KL / recon / $L_0$ / mean gate).
+- 5 unit tests in `tests/test_decomposition.py` covering forward identity,
+  unmasked atom + Δ identity, full-zero ablation invariant, gate clamp,
+  stochastic mask bounds.
+
+### Results
+
+Decomposition trained for **20 000 steps × 4 mask samples** per config on an
+RTX A6000, full-table batches, AdamW lr = 1e-3, $\lambda_\text{behavior} = \lambda_\text{recon} = 1.0$,
+$\lambda_\text{sparsity} = \lambda_\text{frequency} = 10^{-3}$, $C_A = C_B = 2 d_\text{hidden}$.
+
+| run | $C_A = C_B$ | final loss | KL | recon $A$ | recon $B$ | $L_0(A)$ / $C_A$ | $L_0(B)$ / $C_B$ |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| `modadd_p13_grok` | 64 | 7.4e-03 | 5.6e-04 | 1.4e-05 | 1.2e-05 | 1.24 / 64 | 1.19 / 64 |
+| `modadd_p23_grok` | 96 | 6.7e-03 | 2.3e-04 | 1.3e-05 | 1.7e-05 | 1.11 / 96 | 1.09 / 96 |
+| `modadd_p47_grok` | 192 | 6.5e-03 | 4.2e-04 | 1.6e-05 | 1.3e-05 | 1.04 / 192 | 1.10 / 192 |
+
+All three pass the acceptance criteria from `PASS_OFF.md` § 6:
+
+- relative parameter reconstruction error $\le 5\%$ (we hit $\sim 10^{-5}$,
+  three orders of magnitude inside spec);
+- behavior KL $\le 10^{-2}$ (we hit $\sim 10^{-4}$);
+- gate $L_0$ substantially less than $C_A / C_B$ (we hit ≈ 1 active gate
+  per sample regardless of config — the gates are *very* sparse).
+
+Wall time on the A6000: ~1 min for `p13_grok`, ~1.5 min for `p23_grok`,
+~10 min for `p47_grok`. Bilinear MLPs were re-trained from scratch on
+GPU (Day 1 + 2.5 are gitignored at the `.pt` level) — that took
+~40 s + ~70 s + ~10 min on the same card.
+
+### What the L₀ ≈ 1 result already suggests
+
+The gate $L_0$ across all three runs sits at ≈ 1 *active gate per input
+sample*, despite $C \in \{64, 96, 192\}$ atoms available. That's an
+order-of-magnitude sparser than the spec's expected "5–20 atoms per
+eigenspace" target, and a heads-up for Day 4: the decomposition seems to
+have organized itself into a near-orthogonal per-input lookup rather than
+into shared mechanisms. The behavior is right ($KL \sim 10^{-4}$) and the
+parameter reconstruction is right ($\|\Delta\|^2 \sim 10^{-5}$), so the
+decomposition is mathematically valid — but Day 4 is the test of whether
+those atoms correspond to the bilinear MLP's *functional* eigenspaces.
+
+### Decomposition curve — p47
+
+![p47 decomposition curves](runs/modadd_p47_grok_seed0/figures/decomposition_curves.png)
+
+Loss + KL drop sharply in the first ~2k steps then converge; recon error
+crashes to $10^{-5}$ inside ~500 steps and stays there; gate $L_0$
+collapses from $C$ at step 0 (everything half-on by init) down to ≈ 1 in
+the first 5k steps; mean gate value settles near 0.005 — almost every gate
+is essentially off for almost every input.
+
+### Test suite
+
+```text
+tests/test_shapes.py                    ....   [4]
+tests/test_functional_equivalence.py    ..     [2]
+tests/test_eigenspace_projectors.py     ...    [3]
+tests/test_decomposition.py             .....  [5]
+14 passed
+```
+
+## Up next — Day 4
+
+- `analysis.py`: per-atom and per-cluster $\Delta M_r$.
+- `metrics.py`: $|\text{Frobenius cosine}|$ and projector-energy alignment.
+- `clustering.py`: gate-correlation threshold-CC clustering.
+- `run_alignment.py`: produce atom×eigenspace and cluster×eigenspace
+  heatmaps + the H1/H2/H3 mean-max-alignment number per probe.
